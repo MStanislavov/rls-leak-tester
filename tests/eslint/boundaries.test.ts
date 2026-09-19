@@ -28,12 +28,14 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 const ERROR = 2;
 
 const IMPORTS = "no-restricted-imports";
+/** The local rule that resolves a specifier before it judges it (scripts/rules-check/eslint-boundaries.mjs). */
+const RESOLVED = "boundaries/resolved-imports";
 const SYNTAX = "no-restricted-syntax";
 const GLOBALS = "no-restricted-globals";
 const NO_DANGER = "react/no-danger";
 const NO_ANY = "@typescript-eslint/no-explicit-any";
 const NO_NON_NULL = "@typescript-eslint/no-non-null-assertion";
-const GOVERNED = [IMPORTS, SYNTAX, GLOBALS, NO_DANGER, NO_ANY, NO_NON_NULL];
+const GOVERNED = [IMPORTS, RESOLVED, SYNTAX, GLOBALS, NO_DANGER, NO_ANY, NO_NON_NULL];
 
 const PURE_DIRS = ["runner", "checks", "export", "scenario"];
 
@@ -144,6 +146,7 @@ describe("ARCH-002 only src/lib/config reads process.env", () => {
     ['const p = globalThis["process"];\nexport const other = p.env.OTHER;\n', SYNTAX],
     ["const p = global.process;\nexport const other = p.env.OTHER;\n", SYNTAX],
     ["const { process: p } = globalThis;\nexport const other = p.env.OTHER;\n", SYNTAX],
+    ['const { "process": p } = globalThis;\nexport const other = p.env.OTHER;\n', SYNTAX],
   ];
 
   it.each([
@@ -271,6 +274,67 @@ describe("ARCH-004 src/lib never imports the UI layers", () => {
       );
     },
   );
+
+  /** Every form that names a module, for one specifier. */
+  const importForms = (specifier: string): string[] => [
+    `import { thing } from "${specifier}";\nexport { thing };\n`,
+    `import type { Thing } from "${specifier}";\nexport type { Thing };\n`,
+    `export * from "${specifier}";\n`,
+    `export { thing } from "${specifier}";\n`,
+    `export const load = () => import("${specifier}");\n`,
+    `export const load = () => import(\`${specifier}\`);\n`,
+    `export type Thing = import("${specifier}").Thing;\n`,
+  ];
+
+  // The banned directory is reached THROUGH another one, so the text patterns of
+  // no-restricted-imports do not see it; boundaries/resolved-imports resolves first.
+  it.each([
+    ["src/lib/security/csp.ts", "../../../src/components/ui/button"],
+    ["src/lib/security/csp.ts", "../../lib/../components/ui/button"],
+    ["src/lib/security/csp.ts", "../engine/../../app/lab/page"],
+    ["src/lib/engine/worker/client.ts", "../../../../src/app/lab/page"],
+    ["src/lib/config/server.ts", "../../../src/components/ui/button"],
+    ["src/lib/store/port.test.ts", "@/lib/../components/ui/button"],
+    ["src/lib/runner/core.ts", "../../../src/components/ui/button"],
+  ])("fails %s importing %s, which resolves into a UI layer", async (file, specifier) => {
+    for (const code of importForms(specifier)) {
+      await expectViolation(file, code, RESOLVED, "ARCH-004");
+    }
+    const commonJs = file.replace(/(?:\.test)?\.ts$/, ".cjs");
+    await expectViolation(
+      commonJs,
+      `module.exports = require("${specifier}");\n`,
+      RESOLVED,
+      "ARCH-004",
+    );
+  });
+
+  it("reports the direct spellings through the resolved rule as well", async () => {
+    for (const specifier of specifiers) {
+      // "../components" is the UI layer only from a file directly under src/lib.
+      const file = specifier === "../components" ? "src/lib/utils.ts" : "src/lib/engine/port.ts";
+      await expectViolation(
+        file,
+        `import { thing } from "${specifier}";\nexport { thing };\n`,
+        RESOLVED,
+        "ARCH-004",
+      );
+    }
+  });
+
+  it("does not mistake a library directory for a UI layer by its name", async () => {
+    await expectAllowed(
+      "src/lib/security/csp.ts",
+      [
+        'import { a } from "../../lib/engine/components/port";',
+        'import { b } from "./app/port";',
+        'import { c } from "../../../src/lib/utils";',
+        'import { d } from "../../../tests/components/helper";',
+        "export { a, b, c, d };",
+        "",
+      ].join("\n"),
+    );
+  });
 
   it("passes the same imports from the UI, and library imports inside src/lib", async () => {
     await expectAllowed(
@@ -422,6 +486,81 @@ describe("ARCH-001 the pure directories", () => {
     }
   }, 60_000);
 
+  // Reached through an intermediate directory: only the resolved rule sees these.
+  const throughAnotherDirectory = [
+    "../../lib/redis/keys",
+    "../../lib/ai/model",
+    "../../../src/lib/store/local",
+    "../checks/../redis/keys",
+    "../../lib/config/server",
+    "../../lib/config",
+    "../scenario/../config/runtime",
+    "@/lib/runner/../redis/keys",
+  ];
+
+  it.each(PURE_DIRS)(
+    "fails an impure library directory reached through another one in src/lib/%s",
+    async (dir) => {
+      for (const specifier of throughAnotherDirectory) {
+        for (const file of [`src/lib/${dir}/core.ts`, `src/lib/${dir}/core.test.ts`]) {
+          await expectViolation(
+            file,
+            `import * as banned from "${specifier}";\nexport { banned };\n`,
+            RESOLVED,
+            "ARCH-001",
+          );
+        }
+        await expectViolation(
+          `src/lib/${dir}/core.ts`,
+          `import type { Banned } from "${specifier}";\nexport type { Banned };\n`,
+          RESOLVED,
+          "ARCH-001",
+        );
+        await expectViolation(
+          `src/lib/${dir}/core.ts`,
+          `export const load = () => import("${specifier}");\n`,
+          RESOLVED,
+          "ARCH-001",
+        );
+        await expectViolation(
+          `src/lib/${dir}/core.cjs`,
+          `module.exports = require("${specifier}");\n`,
+          RESOLVED,
+          "ARCH-001",
+        );
+      }
+      await expectViolation(
+        `src/lib/${dir}/core.ts`,
+        'import { Button } from "../../../src/components/ui/button";\nexport { Button };\n',
+        RESOLVED,
+        "ARCH-004",
+      );
+    },
+  );
+
+  it("keeps the pure config parser and the pure directories allowed through any spelling", async () => {
+    await expectAllowed(
+      "src/lib/runner/core.ts",
+      [
+        'import { parsePublicEnv } from "../../lib/config/env";',
+        'import { parseServerEnv } from "../config/env.ts";',
+        'import { defaults } from "../../lib/scenario/defaults";',
+        'import { registry } from "../../../src/lib/checks/registry";',
+        'import type { SqlEngine } from "../../lib/engine/port";',
+        "export { parsePublicEnv, parseServerEnv, defaults, registry };",
+        "export type { SqlEngine };",
+        "",
+      ].join("\n"),
+    );
+    // Not the parser: a sibling that only starts with its name.
+    await expectViolation(
+      "src/lib/runner/core.ts",
+      'import { read } from "../../lib/config/env.server";\nexport { read };\n',
+      RESOLVED,
+      "ARCH-001",
+    );
+  });
+
   it.each(PURE_DIRS)("fails the network globals in src/lib/%s", async (dir) => {
     const file = `src/lib/${dir}/core.ts`;
     const bare = [
@@ -433,9 +572,23 @@ describe("ARCH-001 the pure directories", () => {
     for (const code of bare) await expectViolation(file, code, GLOBALS, "ARCH-001");
     const members = [
       'export const load = () => globalThis.fetch("/api/health");\n',
+      'export const load = () => global.fetch("/api/health");\n',
       'export const open = () => new window.WebSocket("/socket");\n',
       'export const open = () => new self.EventSource("/events");\n',
       'export const send = () => navigator.sendBeacon("/beacon");\n',
+      // The bracket form, as for process.
+      'export const load = () => globalThis["fetch"]("/api/health");\n',
+      'export const open = () => new window["WebSocket"]("/socket");\n',
+      'export const open = () => new self["XMLHttpRequest"]();\n',
+      'export const open = () => new global["EventSource"]("/events");\n',
+      'export const send = () => navigator["sendBeacon"]("/beacon");\n',
+      // Destructured from a global object, renamed or not.
+      'const { fetch: load } = globalThis;\nexport const run = () => load("/api/health");\n',
+      'const { WebSocket: Socket } = window;\nexport const open = () => new Socket("/socket");\n',
+      'const { EventSource: Source } = self;\nexport const open = () => new Source("/events");\n',
+      "const { XMLHttpRequest: Xhr } = global;\nexport const open = () => new Xhr();\n",
+      'const { "fetch": load } = globalThis;\nexport const run = () => load("/api/health");\n',
+      'const { sendBeacon } = navigator;\nexport const send = () => sendBeacon("/beacon");\n',
     ];
     for (const code of members) await expectViolation(file, code, SYNTAX, "ARCH-001");
   });
@@ -465,6 +618,10 @@ describe("ARCH-001 the pure directories", () => {
     );
     await expectAllowed(
       "src/lib/ai/explain.ts",
+      'import { keys } from "../../lib/redis/keys";\nconst { fetch: load } = globalThis;\nexport const run = () => globalThis["fetch"](keys.health) ?? load(keys.health);\n',
+    );
+    await expectAllowed(
+      "src/lib/ai/explain.ts",
       'import { getServerConfig } from "@/lib/config/server";\nimport { keys } from "@/lib/redis/keys";\nexport { getServerConfig, keys };\n',
     );
     await expectAllowed(
@@ -481,12 +638,12 @@ describe("the resolved configuration", () => {
     ["src/components/panel.cjs", [SYNTAX, IMPORTS, GLOBALS]],
     ["src/proxy.ts", [SYNTAX, IMPORTS, GLOBALS, NO_DANGER]],
     ["src/lib/engine/port.ts", GOVERNED],
-    ["src/lib/engine/port.cjs", [SYNTAX, IMPORTS, GLOBALS]],
-    ["src/lib/config/server.ts", [SYNTAX, IMPORTS, NO_DANGER, NO_ANY, NO_NON_NULL]],
+    ["src/lib/engine/port.cjs", [SYNTAX, IMPORTS, RESOLVED, GLOBALS]],
+    ["src/lib/config/server.ts", [SYNTAX, IMPORTS, RESOLVED, NO_DANGER, NO_ANY, NO_NON_NULL]],
     ...PURE_DIRS.flatMap((dir): [string, string[]][] => [
       [`src/lib/${dir}/core.ts`, GOVERNED],
       [`src/lib/${dir}/core.test.ts`, GOVERNED],
-      [`src/lib/${dir}/core.cjs`, [SYNTAX, IMPORTS, GLOBALS]],
+      [`src/lib/${dir}/core.cjs`, [SYNTAX, IMPORTS, RESOLVED, GLOBALS]],
     ]),
   ];
 
@@ -517,15 +674,15 @@ const NAMED_BLOCKS: Record<string, { files: string[]; ignores?: string[]; rules:
     ignores: [CONFIG_GLOB],
     rules: [SYNTAX, IMPORTS, GLOBALS],
   },
-  "rules/arch-004": { files: [`src/lib/**/*.${CORE_EXT}`], rules: [IMPORTS, SYNTAX] },
+  "rules/arch-004": { files: [`src/lib/**/*.${CORE_EXT}`], rules: [IMPORTS, RESOLVED, SYNTAX] },
   "rules/code-001-code-002": {
     files: [`src/lib/**/*.${PLUGIN_EXT}`],
     rules: [NO_ANY, NO_NON_NULL],
   },
-  "rules/config-dir": { files: [CONFIG_GLOB], rules: [IMPORTS, SYNTAX] },
+  "rules/config-dir": { files: [CONFIG_GLOB], rules: [IMPORTS, RESOLVED, SYNTAX] },
   "rules/arch-001": {
     files: PURE_DIRS.map((dir) => `src/lib/${dir}/**/*.${CORE_EXT}`),
-    rules: [IMPORTS, GLOBALS, SYNTAX],
+    rules: [IMPORTS, RESOLVED, GLOBALS, SYNTAX],
   },
 };
 
@@ -535,9 +692,23 @@ type Scope = "outside" | "src" | "lib" | "config" | "pure";
 const DECIDED_BY: Record<Scope, Partial<Record<string, string>>> = {
   outside: { [SYNTAX]: "rules/sec-001" },
   src: { [SYNTAX]: "rules/arch-002", [IMPORTS]: "rules/arch-002", [GLOBALS]: "rules/arch-002" },
-  lib: { [SYNTAX]: "rules/arch-004", [IMPORTS]: "rules/arch-004", [GLOBALS]: "rules/arch-002" },
-  config: { [SYNTAX]: "rules/config-dir", [IMPORTS]: "rules/config-dir" },
-  pure: { [SYNTAX]: "rules/arch-001", [IMPORTS]: "rules/arch-001", [GLOBALS]: "rules/arch-001" },
+  lib: {
+    [SYNTAX]: "rules/arch-004",
+    [IMPORTS]: "rules/arch-004",
+    [RESOLVED]: "rules/arch-004",
+    [GLOBALS]: "rules/arch-002",
+  },
+  config: {
+    [SYNTAX]: "rules/config-dir",
+    [IMPORTS]: "rules/config-dir",
+    [RESOLVED]: "rules/config-dir",
+  },
+  pure: {
+    [SYNTAX]: "rules/arch-001",
+    [IMPORTS]: "rules/arch-001",
+    [RESOLVED]: "rules/arch-001",
+    [GLOBALS]: "rules/arch-001",
+  },
 };
 
 function scopeOf(file: string): Scope {
@@ -647,7 +818,7 @@ describe("every file resolves to what the named block of its scope declares", ()
   async function expectScopeOptions(file: string): Promise<void> {
     const rules = await resolved(file);
     const decidedBy = DECIDED_BY[scopeOf(file)];
-    for (const rule of [SYNTAX, IMPORTS, GLOBALS]) {
+    for (const rule of [SYNTAX, IMPORTS, RESOLVED, GLOBALS]) {
       const blockName = decidedBy[rule];
       if (blockName === undefined) {
         expect(rules[rule], `${rule} on ${file}`).toBeUndefined();

@@ -73,14 +73,18 @@ Boundaries, enforced by ESLint and the rules check, not by intention:
   `ioredis`, `@supabase/*`, `ai`, `@ai-sdk/*`, `node:fs`, `node:http`, `node:http2`, `node:dns`
   and friends, nothing from `@/lib/redis`, `@/lib/ai`, `@/lib/store` or `@/lib/config` (except
   the pure parser `@/lib/config/env`), by alias or relative path, through `import`, `import()` or
-  `require()`, and use no `fetch`, `WebSocket`, `XMLHttpRequest`, `EventSource`, `sendBeacon`.
+  `require()`, and use no `fetch`, `WebSocket`, `XMLHttpRequest`, `EventSource`, `sendBeacon`,
+  not as `globalThis["fetch"]` or `const { fetch } = globalThis` either. A relative path is
+  resolved before it is judged (`boundaries/resolved-imports`), so `../../lib/redis/keys` is as
+  much an error as `../redis/keys`.
   This covers their test files, `.cjs` files and type-only imports too: a test that needs the file
   system or a DOM lives in `tests/`. Pure code takes values and ports as parameters.
 - ARCH-002: only `src/lib/config` reads `process.env`, and nothing else under `src/` touches the
   `process` object at all (an alias such as `const p = process` is an error). Server code calls
   `getServerConfig()`, client code `getPublicConfig()`, `src/proxy.ts` uses `runtime.ts`, pure
   code takes parameters.
-- ARCH-004: `src/lib/**` never imports from `src/app` or `src/components`.
+- ARCH-004: `src/lib/**` never imports from `src/app` or `src/components`, whichever directories
+  the relative path passes through (`../../../src/components/ui/button` included).
 - SEC-004 is an allow-list: PGlite, a Postgres driver or `src/lib/engine` is value-imported only
   by `src/lib/engine`, a module whose first statement is `"use client"`, and tests. Never by a
   route handler, `src/app/api`, `src/lib/ai`, `src/lib/redis`, `src/lib/store`, or any file with
@@ -91,7 +95,8 @@ Boundaries, enforced by ESLint and the rules check, not by intention:
 - SEC-002: a non-test file under `src/` that reads `.json()`, `.formData()`, `.text()`,
   `.arrayBuffer()`, `.blob()`, `.bytes()`, `JSON.parse(`, `localStorage.getItem(`, a header
   (`.headers.get(`, `headers().get(`), a cookie, or `formData.get(` / `searchParams.get(` (in a
-  route also `searchParams` or `params`) must parse with zod or an imported `parse*` /
+  route, and in a `page`, `layout`, `template`, `default` or metadata image file under `src/app`,
+  `generateMetadata` included, also `searchParams` or `params`) must parse with zod or an imported `parse*` /
   `validate*` function from `src/lib`. A Server Function is such a boundary too: a file with a
   `"use server"` directive whose async functions take arguments must validate them, whatever the
   TypeScript signature says.
@@ -103,7 +108,7 @@ Boundaries, enforced by ESLint and the rules check, not by intention:
   fails the rules check. Never remove the setup file from `vitest.config.mts`.
 - The six ESLint-only rules are pinned by `tests/eslint/boundaries.test.ts`. Flat config replaces
   rule options instead of merging them, so a governed rule (`no-restricted-imports`,
-  `no-restricted-syntax`, `no-restricted-globals`, `react/no-danger`, the two TypeScript rules) is
+  `boundaries/resolved-imports`, `no-restricted-syntax`, `no-restricted-globals`, `react/no-danger`, the two TypeScript rules) is
   named only in the `rules/*` blocks of `eslint.config.mjs`: add a selector to the shared lists
   there, never a new block for a sub-path. A governed rule outside those blocks, or set to
   `"warn"` or `"off"`, fails the rules check (QUAL-002); so does deleting or skipping that suite,

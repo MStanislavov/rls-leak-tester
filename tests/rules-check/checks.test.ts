@@ -219,6 +219,83 @@ describe("SEC-002 external input is validated with zod", () => {
     expect(checkInputValidation(source(ROUTE, params))).toHaveLength(1);
   });
 
+  describe("params and searchParams of the App Router segment files", () => {
+    const slugPage = lines(
+      'import { loadShared } from "@/lib/store/shared";',
+      "export default async function SharedPage({ params }: { params: Promise<{ slug: string }> }) {",
+      "  const { slug } = await params;",
+      "  return <pre>{await loadShared(slug)}</pre>;",
+      "}",
+    );
+
+    it.each([
+      "src/app/s/[slug]/page.tsx",
+      "src/app/s/[slug]/layout.tsx",
+      "src/app/s/[slug]/template.tsx",
+      "src/app/@modal/s/[slug]/default.tsx",
+      "src/app/s/[slug]/opengraph-image.tsx",
+      "src/app/s/[slug]/page.jsx",
+    ])("fails %s when it uses params unparsed", (file) => {
+      expect(summarize(checkInputValidation(source(file, slugPage)))).toEqual([
+        `SEC-002 ${file}:2`,
+      ]);
+    });
+
+    it("fails searchParams of a page and params of generateMetadata", () => {
+      const search = lines(
+        "export default async function LabPage(props: PageProps) {",
+        "  const query = await props.searchParams;",
+        "  return <Lab scenario={query.scenario} />;",
+        "}",
+      );
+      const violations = checkInputValidation(source("src/app/lab/page.tsx", search));
+      expect(summarize(violations)).toEqual(["SEC-002 src/app/lab/page.tsx:2"]);
+      expect(violations[0]?.message).toMatch(/query parameters/);
+
+      const metadata = lines(
+        'import type { Metadata } from "next";',
+        "export async function generateMetadata({ params }: Props): Promise<Metadata> {",
+        "  return { title: (await params).slug };",
+        "}",
+        "export default function SharedPage() {",
+        "  return null;",
+        "}",
+      );
+      const found = checkInputValidation(source("src/app/s/[slug]/page.tsx", metadata));
+      expect(summarize(found)).toEqual(["SEC-002 src/app/s/[slug]/page.tsx:2"]);
+      expect(found[0]?.message).toMatch(/route parameters/);
+    });
+
+    it("passes a zod parse, a parse* function from src/lib, and a page without parameters", () => {
+      const withSchema = slugPage.replace("await params;", "slugSchema.parse(await params);");
+      expect(checkInputValidation(source("src/app/s/[slug]/page.tsx", withSchema))).toEqual([]);
+      const withValidator = lines(
+        'import { parseSlug } from "@/lib/store/slug";',
+        "export default async function SharedPage({ params }: Props) {",
+        "  const slug = parseSlug((await params).slug);",
+        "  return <pre>{slug}</pre>;",
+        "}",
+      );
+      expect(checkInputValidation(source("src/app/s/[slug]/page.tsx", withValidator))).toEqual([]);
+      expect(
+        checkInputValidation(
+          source("src/app/page.tsx", "export default function Home() {\n  return null;\n}\n"),
+        ),
+      ).toEqual([]);
+    });
+
+    it("stays scoped to the segment files: a component or a library module may name params", () => {
+      for (const file of [
+        "src/components/lab/panel.tsx",
+        "src/app/s/[slug]/shared-view.tsx",
+        "src/app/s/[slug]/error.tsx",
+        "src/lib/store/shared.ts",
+      ]) {
+        expect(checkInputValidation(source(file, slugPage)), file).toEqual([]);
+      }
+    });
+  });
+
   it("fails library and UI code that reads storage or JSON unparsed", () => {
     const store = lines(
       "export function load(key: string) {",

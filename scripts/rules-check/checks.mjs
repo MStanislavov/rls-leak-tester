@@ -88,6 +88,13 @@ const CODE_FILE = /\.[cm]?[jt]sx?$/;
 const TEST_FILE = /\.(test|spec)\.[cm]?[jt]sx?$/;
 const TEST_DIR = /(^|\/)(__snapshots__|__mocks__|__fixtures__|fixtures)\//;
 const ROUTE_FILE = /^src\/app\/(.+\/)?route\.[cm]?[jt]sx?$/;
+/**
+ * The files of the App Router that Next.js hands `params` (and a page `searchParams`), to the
+ * component and to `generateMetadata` / `generateViewport` alike: page, layout, template, default
+ * and the metadata image files. The visitor chooses both, exactly as with a route handler.
+ */
+const SEGMENT_FILE =
+  /^src\/app\/(.+\/)?(?:page|layout|template|default|icon|apple-icon|opengraph-image|twitter-image)\.[cm]?[jt]sx?$/;
 const BINARY_FILE =
   /\.(ico|png|jpe?g|gif|webp|avif|bmp|woff2?|ttf|otf|eot|wasm|data|zip|gz|tgz|br|pdf|mp4|webm|mp3|tsbuildinfo)$/i;
 
@@ -101,6 +108,8 @@ export const isTestFile = (path) =>
   path.startsWith("e2e/");
 /** @param {string} path */
 export const isRouteFile = (path) => ROUTE_FILE.test(path);
+/** @param {string} path */
+export const isSegmentFile = (path) => SEGMENT_FILE.test(path);
 /** @param {string} path */
 export const isBinaryFile = (path) => BINARY_FILE.test(path);
 /** @param {string} path */
@@ -350,6 +359,10 @@ const INPUT_READS = [
     name: "a cookie",
   },
 ];
+/**
+ * In a route handler and in a segment file (isSegmentFile) the bare words count: `params` and
+ * `searchParams` are handed in by Next.js under exactly these names, and the visitor chooses them.
+ */
 const ROUTE_INPUT_READS = [
   { pattern: /\bsearchParams\b/, name: "query parameters" },
   { pattern: /\bparams\b/, name: "route parameters" },
@@ -365,7 +378,8 @@ const VALIDATOR_NAME = /^(?:parse|validate|safeParse)(?![a-z])(?!Int$|Float$)/;
 export function checkInputValidation(source) {
   const { path, code } = source;
   if (!isProductCode(path)) return [];
-  const reads = isRouteFile(path) ? [...INPUT_READS, ...ROUTE_INPUT_READS] : INPUT_READS;
+  const reads =
+    isRouteFile(path) || isSegmentFile(path) ? [...INPUT_READS, ...ROUTE_INPUT_READS] : INPUT_READS;
   const hits = reads.flatMap((read) => {
     const match = read.pattern.exec(code);
     return match === null ? [] : [{ name: read.name, index: match.index }];
@@ -1602,6 +1616,7 @@ export function checkExclusionsListed(repo, context) {
 /** The ESLint rules behind ARCH-001, ARCH-002, ARCH-004, CODE-001, CODE-002 and SEC-001. */
 export const GOVERNED_ESLINT_RULES = [
   "no-restricted-imports",
+  "boundaries/resolved-imports",
   "no-restricted-syntax",
   "no-restricted-globals",
   "react/no-danger",
@@ -1622,13 +1637,26 @@ export const GOVERNED_ESLINT_BLOCKS = {
   "rules/sec-001": ["no-restricted-syntax"],
   "rules/sec-001-react": ["react/no-danger"],
   "rules/arch-002": ["no-restricted-syntax", "no-restricted-imports", "no-restricted-globals"],
-  "rules/arch-004": ["no-restricted-imports", "no-restricted-syntax"],
+  "rules/arch-004": [
+    "no-restricted-imports",
+    "boundaries/resolved-imports",
+    "no-restricted-syntax",
+  ],
   "rules/code-001-code-002": [
     "@typescript-eslint/no-explicit-any",
     "@typescript-eslint/no-non-null-assertion",
   ],
-  "rules/config-dir": ["no-restricted-imports", "no-restricted-syntax"],
-  "rules/arch-001": ["no-restricted-imports", "no-restricted-globals", "no-restricted-syntax"],
+  "rules/config-dir": [
+    "no-restricted-imports",
+    "boundaries/resolved-imports",
+    "no-restricted-syntax",
+  ],
+  "rules/arch-001": [
+    "no-restricted-imports",
+    "boundaries/resolved-imports",
+    "no-restricted-globals",
+    "no-restricted-syntax",
+  ],
 };
 
 /**

@@ -3,6 +3,8 @@ import nextVitals from "eslint-config-next/core-web-vitals";
 import nextTs from "eslint-config-next/typescript";
 import prettier from "eslint-config-prettier/flat";
 
+import boundaries from "./scripts/rules-check/eslint-boundaries.mjs";
+
 /*
  * Architecture and safety rules from rules.yaml that ESLint enforces. Every
  * message carries its rule id. All of them are errors; none may be downgraded
@@ -17,7 +19,8 @@ import prettier from "eslint-config-prettier/flat";
  * the wider scopes ban.
  *
  * For the same reason a governed rule is named in the `rules/*` blocks of this
- * file and nowhere else. A later block that sets one of them for a sub-path,
+ * file and nowhere else (`boundaries/resolved-imports` included: its zones are
+ * options too). A later block that sets one of them for a sub-path,
  * even as "error", silently drops everything the named blocks ban there. The
  * rules check (QUAL-002) refuses a governed rule name outside these blocks, and
  * tests/eslint/boundaries.test.ts compares the resolved options of every real
@@ -116,6 +119,38 @@ function restrictedImports({ processModule = false, pure = false }) {
 }
 
 // ---------------------------------------------------------------------------
+// boundaries/resolved-imports, composed per scope
+// ---------------------------------------------------------------------------
+
+/*
+ * The patterns above match the specifier as text and only see a banned
+ * directory that follows the `../` chain directly. This rule resolves the
+ * specifier against the importing file (scripts/rules-check/eslint-boundaries.mjs,
+ * the resolver of the SEC-004 check), so `../../lib/redis/keys` from
+ * src/lib/runner, `../../../src/components/ui/button` from src/lib/security and
+ * `../checks/../redis/keys` are errors as well, in every import form.
+ */
+const ARCH_004_RESOLVED =
+  "ARCH-004: src/lib never imports from src/app or src/components, whichever directories the relative path passes through.";
+const ARCH_001_RESOLVED =
+  "ARCH-001: this directory is pure and reaches nothing from src/lib/redis, src/lib/ai, src/lib/store or the readers in src/lib/config, whichever directories the relative path passes through.";
+
+const appLayerZone = { dirs: ["src/app", "src/components"], message: ARCH_004_RESOLVED };
+const pureZones = [
+  { dirs: ["src/lib/redis", "src/lib/ai", "src/lib/store"], message: ARCH_001_RESOLVED },
+  {
+    dirs: ["src/lib/config"],
+    // The pure parser env.ts stays allowed, exactly as in ALIAS_CONFIG_READER.
+    except: String.raw`^src/lib/config/env(?:\.[cm]?[jt]s)?$`,
+    message: ARCH_001_RESOLVED,
+  },
+];
+
+function resolvedImports({ pure = false }) {
+  return ["error", [appLayerZone, ...(pure ? pureZones : [])]];
+}
+
+// ---------------------------------------------------------------------------
 // no-restricted-syntax, composed per scope
 // ---------------------------------------------------------------------------
 
@@ -156,6 +191,8 @@ const loadSelectors = (/** @type {string} */ regexSource, /** @type {string} */ 
 ];
 
 const GLOBAL_OBJECTS = ["globalThis", "global", "window", "self"];
+// The esquery form of "one of the global objects", for [object.name=…] and [init.name=…].
+const GLOBAL_OBJECT = `/^(${GLOBAL_OBJECTS.join("|")})$/`;
 
 // The bare identifier `process` (no-restricted-globals). src/ has no other use
 // for it: NODE_ENV comes from src/lib/config/runtime.ts.
@@ -183,16 +220,21 @@ const processEnvSelectors = [
   // globalThis.process, global["process"]: no-restricted-globals only sees the
   // bare identifier, and an alias of the object reads the environment unseen.
   {
-    selector: `MemberExpression[object.name=/^(${GLOBAL_OBJECTS.join("|")})$/][property.name='process']`,
+    selector: `MemberExpression[object.name=${GLOBAL_OBJECT}][property.name='process']`,
     message: ARCH_002_GLOBAL,
   },
   {
-    selector: `MemberExpression[object.name=/^(${GLOBAL_OBJECTS.join("|")})$/][property.value='process']`,
+    selector: `MemberExpression[object.name=${GLOBAL_OBJECT}][property.value='process']`,
     message: ARCH_002_GLOBAL,
   },
   // const { process } = globalThis, const { process: p } = globalThis
   {
-    selector: `VariableDeclarator[init.name=/^(${GLOBAL_OBJECTS.join("|")})$/] > ObjectPattern > Property[key.name='process']`,
+    selector: `VariableDeclarator[init.name=${GLOBAL_OBJECT}] > ObjectPattern > Property[key.name='process']`,
+    message: ARCH_002_GLOBAL,
+  },
+  // const { "process": p } = globalThis
+  {
+    selector: `VariableDeclarator[init.name=${GLOBAL_OBJECT}] > ObjectPattern > Property[key.value='process']`,
     message: ARCH_002_GLOBAL,
   },
   // require("node:process") and import("node:process")
@@ -217,24 +259,35 @@ const PURE_LOAD = [
 ].join("|");
 
 const NETWORK_GLOBALS = ["fetch", "XMLHttpRequest", "WebSocket", "EventSource"];
+const NETWORK_GLOBAL = `/^(${NETWORK_GLOBALS.join("|")})$/`;
 
-const pureSelectors = [
-  ...loadSelectors(PURE_LOAD, ARCH_001_DYNAMIC),
-  {
-    // globalThis.fetch, window.WebSocket, self.EventSource: no-restricted-globals
-    // only sees the bare identifier.
-    selector: `MemberExpression[object.name=/^(globalThis|window|self)$/][property.name=/^(${NETWORK_GLOBALS.join("|")})$/]`,
-    message: ARCH_001_GLOBAL,
-  },
-  {
-    selector: "MemberExpression[property.name='sendBeacon']",
-    message: ARCH_001_GLOBAL,
-  },
-];
+// no-restricted-globals only sees the bare identifier. These mirror the
+// selectors for `process` above, spelling by spelling.
+const networkGlobalSelectors = [
+  // globalThis.fetch, window.WebSocket, self.EventSource, global.fetch
+  `MemberExpression[object.name=${GLOBAL_OBJECT}][property.name=${NETWORK_GLOBAL}]`,
+  // globalThis["fetch"], window["WebSocket"]
+  `MemberExpression[object.name=${GLOBAL_OBJECT}][property.value=${NETWORK_GLOBAL}]`,
+  // const { fetch } = globalThis, const { fetch: load } = window
+  `VariableDeclarator[init.name=${GLOBAL_OBJECT}] > ObjectPattern > Property[key.name=${NETWORK_GLOBAL}]`,
+  // const { "fetch": load } = self
+  `VariableDeclarator[init.name=${GLOBAL_OBJECT}] > ObjectPattern > Property[key.value=${NETWORK_GLOBAL}]`,
+  // navigator.sendBeacon, navigator["sendBeacon"], const { sendBeacon } = navigator
+  "MemberExpression[property.name='sendBeacon']",
+  "MemberExpression[property.value='sendBeacon']",
+  "VariableDeclarator > ObjectPattern > Property[key.name='sendBeacon']",
+  "VariableDeclarator > ObjectPattern > Property[key.value='sendBeacon']",
+].map((selector) => ({ selector, message: ARCH_001_GLOBAL }));
+
+const pureSelectors = [...loadSelectors(PURE_LOAD, ARCH_001_DYNAMIC), ...networkGlobalSelectors];
 
 const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
+
+  // The local plugin behind boundaries/resolved-imports. No `files`: it is
+  // registered for every file, CommonJS included, and sets no rule itself.
+  { name: "rules/plugins", plugins: { boundaries } },
 
   // SEC-001: everywhere, including scripts, tests, config files and CommonJS.
   {
@@ -273,6 +326,7 @@ const eslintConfig = defineConfig([
     files: LIB,
     rules: {
       "no-restricted-imports": restrictedImports({ processModule: true }),
+      "boundaries/resolved-imports": resolvedImports({ pure: false }),
       "no-restricted-syntax": [
         "error",
         ...dangerSelectors,
@@ -299,6 +353,7 @@ const eslintConfig = defineConfig([
     files: CONFIG_DIR,
     rules: {
       "no-restricted-imports": restrictedImports({ processModule: false }),
+      "boundaries/resolved-imports": resolvedImports({ pure: false }),
       "no-restricted-syntax": ["error", ...dangerSelectors, ...appLayerLoadSelectors],
     },
   },
@@ -309,6 +364,7 @@ const eslintConfig = defineConfig([
     files: PURE_DIRS,
     rules: {
       "no-restricted-imports": restrictedImports({ processModule: true, pure: true }),
+      "boundaries/resolved-imports": resolvedImports({ pure: true }),
       "no-restricted-globals": [
         "error",
         ...processGlobal,
