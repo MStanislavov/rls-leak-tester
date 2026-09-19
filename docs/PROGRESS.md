@@ -164,3 +164,57 @@ enforcer.
   processes started by a test, a Pages Router directory (the project is App Router only).
 - Still open from Phase 1: `npm audit` advisory via dev-only `@sonar/scan` (Phase 8); boot-time
   config validation through `src/instrumentation.ts` (Phase 6, with the first server route).
+
+## Phase 3: the core library (2026-09-20)
+
+### Done
+
+- `src/lib/scenario`: types, strict zod 4 schemas (`parseScenario`), defaults, column heuristics,
+  claims helpers, a psql-faithful SQL statement splitter, identifier/literal quoting, stable
+  serialisation (ADR 0010).
+- `src/lib/engine` + `src/lib/runner/{setup,introspect,ground-truth}`: `SqlEngine` port, PGlite
+  adapter for Node and the worker, setup pipeline (shim, grants BEFORE the user's schema,
+  statement-by-statement errors with SQLSTATE and line), catalog introspection, ground truth
+  (ADR 0011).
+- `src/lib/runner`: probe builders shared with the future export, the matrix runner (SELECT /
+  UPDATE / DELETE reach with per-row fallback, two scope-escape shapes, INSERT classes, custom
+  scope), classifier, verdict (`ISOLATED` / `LEAKING` / `NOT PROVEN`), deterministic result JSON,
+  progress + cancellation, engine rebuild after a timeout (ADRs 0012, 0016).
+- `src/lib/checks`: RLS001..RLS009 with documentation links, a positive and a negative fixture per
+  rule (ADR 0013).
+- Three templates in a leaky and a fixed variant with explicit expectations and declared expected
+  failures (ADR 0014).
+- Golden tests: exact failing cells per leaky variant, `ISOLATED` for fixed variants, full JSON
+  snapshots, byte-identical second run, replay of every failing cell without the runner, database
+  dump identical before and after a run (ADR 0015). Runner output and template declarations agreed
+  on the first run: 6 variants, 304 cells, 0 disagreements.
+- Three independent lens reviews (RLS semantics, robustness/determinism, spec conformance) found 18
+  reproduced defects (13 blockers, 5 majors; 12 root causes), among them ways to get a false
+  `ISOLATED`. Every one was first written as a failing test, then fixed (ADR 0016).
+- Governance follow-up: SEC-002 covers `params` / `searchParams` in pages, a resolver-based ESLint
+  boundary rule, computed-member spellings of the network globals, accepted limits (ADR 0009).
+
+### Verified (orchestrator re-run)
+
+| Command                             | Result                                                           |
+| ----------------------------------- | ---------------------------------------------------------------- |
+| `npm run format:check`              | exit 0                                                           |
+| `npm run lint`                      | exit 0, zero warnings                                            |
+| `npm run typecheck`                 | exit 0                                                           |
+| `npm run rules`                     | `ok, 15 script rules, 289 files`                                 |
+| `REDIS_URL=… npm run test:coverage` | 89 files, 1845 tests passed; lines 98.96, branches 96.95 percent |
+
+Full matrix run in Node (median of 7, fresh PGlite each): 405 to 471 ms per template variant, of
+which about 380 ms is setup; a cell takes about 1 ms.
+
+## Phase 6, server side (built alongside Phase 3, 2026-09-20)
+
+- `src/lib/redis`: ports `RateLimiter`, `Cache`, `Lock` with a Redis and an in-memory adapter each,
+  one Lua sliding-window limiter, the single key builder (`rlsleak:{env}:{purpose}:{id}`, every
+  write with a TTL), fail-fast lazy client, `RedisUnavailableError`, single-flight and read-through
+  helpers. One contract suite: 135 tests hermetic, 169 against real Redis (ADR 0017).
+- `src/lib/ai` + `/api/explain` + `/api/health` + `src/instrumentation.ts`: validated 30 KB payload
+  without seed data, untrusted-data prompt, rate limit, cache, single-flight, streamed structured
+  output, fail-closed 503, model id only in `model.ts`; all tests use a mocked model (ADR 0018).
+- Not verified: a live Anthropic stream (no key here, by design). The lab UI for Explain and the
+  verified-fix loop follow in Phase 5/6 UI work.
