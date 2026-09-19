@@ -1,0 +1,36 @@
+# build brief (local only)
+SYSTEM_PROMPT.md
+
+# dependencies
+node_modules/
+
+# next.js / build output
+.next/
+out/
+build/
+coverage/
+*.tsbuildinfo
+next-env.d.ts
+
+# env files and secrets
+.env
+.env.*
+!.env.example
+
+# test artifacts
+playwright-report/
+test-results/
+
+# sonar
+.scannerwork/
+
+# vercel
+.vercel/
+
+# editors / OS
+.idea/
+.vscode/
+.DS_Store
+
+# logs
+*.log
