@@ -1,0 +1,18 @@
+# Prettier also honours .gitignore; these are the tracked or local files it must leave alone.
+package-lock.json
+SYSTEM_PROMPT.md
+.next/
+coverage/
+playwright-report/
+test-results/
+.scannerwork/
+.idea/
+
+# written and rewritten by `next dev`
+AGENTS.md
+
+# generated PGlite distribution files, if the /public/pglite/ fallback is used
+public/pglite/
+
+# snapshots are owned by Vitest
+**/__snapshots__/
