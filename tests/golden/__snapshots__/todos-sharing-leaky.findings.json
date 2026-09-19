@@ -1,0 +1,38 @@
+[
+  {
+    "id": "RLS003",
+    "severity": "high",
+    "object": {
+      "kind": "policy",
+      "schema": "public",
+      "name": "todos_select_public",
+      "table": "todos",
+      "qualifiedName": "\"todos_select_public\" ON \"public\".\"todos\""
+    },
+    "title": "A policy admits every row",
+    "explanation": "USING of this permissive policy is the constant true, so it admits every row for SELECT, for anon, authenticated. Permissive policies are combined with OR: a stricter policy on the same table does not narrow this one. If every row really is meant to be reachable, keep it and set the expectation to \"all\"; otherwise replace true with the condition that ties a row to its user or tenant.",
+    "docsUrl": "https://www.postgresql.org/docs/current/sql-createpolicy.html",
+    "evidence": [
+      {
+        "label": "literally true",
+        "value": "USING"
+      },
+      {
+        "label": "command",
+        "value": "SELECT"
+      },
+      {
+        "label": "roles",
+        "value": "anon, authenticated"
+      },
+      {
+        "label": "using",
+        "value": "true"
+      },
+      {
+        "label": "with check",
+        "value": "(none)"
+      }
+    ]
+  }
+]

@@ -10,18 +10,24 @@ import type {
   WorkerResponse,
 } from "./protocol";
 
+/** One result as PGlite reports it in `rowMode: "array"`. */
+export interface WorkerDatabaseResult {
+  rows: unknown[];
+  affectedRows?: number;
+  fields: Array<{ name: string; dataTypeID: number }>;
+}
+
 /** The slice of PGlite's API the worker needs. `PGlite` satisfies it. */
 export interface WorkerDatabase {
-  exec(
+  /** Simple protocol: many statements, no parameters, one result per statement. */
+  exec(sql: string, options: { rowMode: "array" }): Promise<WorkerDatabaseResult[]>;
+  /** Extended protocol: one statement with `$1` parameters. */
+  query(
     sql: string,
+    params: Array<string | number | boolean | null>,
     options: { rowMode: "array" },
-  ): Promise<
-    Array<{
-      rows: unknown[];
-      affectedRows?: number;
-      fields: Array<{ name: string; dataTypeID: number }>;
-    }>
-  >;
+  ): Promise<WorkerDatabaseResult>;
+  close(): Promise<void>;
 }
 
 export type DatabaseFactory = () => Promise<WorkerDatabase>;
@@ -82,7 +88,7 @@ export function toErrorInfo(error: unknown): SqlErrorInfo {
   return { message: String(error), code: null, detail: null, hint: null, position: null };
 }
 
-function toResultSet(result: Awaited<ReturnType<WorkerDatabase["exec"]>>[number]): SqlResultSet {
+function toResultSet(result: WorkerDatabaseResult): SqlResultSet {
   return {
     fields: result.fields.map((field) => ({ name: field.name, dataTypeId: field.dataTypeID })),
     rows: result.rows.map((row) => (Array.isArray(row) ? row.map(toCell) : [toCell(row)])),
@@ -93,6 +99,12 @@ function toResultSet(result: Awaited<ReturnType<WorkerDatabase["exec"]>>[number]
 /**
  * Builds the worker's request handler. The database is created once, on the
  * first request of any type, and requests are answered strictly in order.
+ *
+ * There is one connection, so a transaction needs no session id: `BEGIN` sent
+ * through `exec` leaves the connection inside that transaction for the requests
+ * that follow, until `COMMIT` or `ROLLBACK` (ADR 0002). Keeping other callers
+ * out of an open transaction is the client's job (`protocol-engine.ts`).
+ * `close` releases the database; the next request would start an empty one.
  */
 export function createRequestHandler(
   createDatabase: DatabaseFactory,
@@ -117,14 +129,35 @@ export function createRequestHandler(
     return ready;
   };
 
+  // Closing a database that never started must not start one.
+  const close = async (): Promise<void> => {
+    const current = ready;
+    ready = null;
+    if (current) {
+      const { db } = await current;
+      await db.close();
+    }
+  };
+
   const answer = async (request: WorkerRequest): Promise<WorkerResponse> => {
     try {
-      const { db, version, startupMs } = await start();
-      if (request.type === "init") {
-        return { id: request.id, ok: true, type: "init", result: { version, startupMs } };
+      if (request.type === "close") {
+        await close();
+        return { id: request.id, ok: true, type: "close" };
       }
-      const results = await db.exec(request.sql, { rowMode: "array" });
-      return { id: request.id, ok: true, type: "exec", results: results.map(toResultSet) };
+      const { db, version, startupMs } = await start();
+      switch (request.type) {
+        case "init":
+          return { id: request.id, ok: true, type: "init", result: { version, startupMs } };
+        case "query": {
+          const result = await db.query(request.sql, [...request.params], { rowMode: "array" });
+          return { id: request.id, ok: true, type: "query", result: toResultSet(result) };
+        }
+        case "exec": {
+          const results = await db.exec(request.sql, { rowMode: "array" });
+          return { id: request.id, ok: true, type: "exec", results: results.map(toResultSet) };
+        }
+      }
     } catch (error) {
       return { id: request.id, ok: false, error: toErrorInfo(error) };
     }

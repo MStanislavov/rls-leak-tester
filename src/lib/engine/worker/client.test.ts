@@ -126,6 +126,48 @@ describe("PgliteWorkerClient", () => {
     await expect(a).resolves.toHaveLength(1);
   });
 
+  it("sends query with its parameters and resolves the single result set", async () => {
+    const { client, current } = setup();
+    const pending = client.query("select $1::int as n", [7]);
+    expect(current().sent.at(-1)).toEqual({
+      id: current().lastId(),
+      type: "query",
+      sql: "select $1::int as n",
+      params: [7],
+    });
+    current().reply({
+      id: current().lastId(),
+      ok: true,
+      type: "query",
+      result: { fields: [{ name: "n", dataTypeId: 23 }], rows: [[7]], affectedRows: 0 },
+    });
+    await expect(pending).resolves.toEqual({
+      fields: [{ name: "n", dataTypeId: 23 }],
+      rows: [[7]],
+      affectedRows: 0,
+    });
+
+    // No parameters is an empty list on the wire, never undefined.
+    const bare = client.query("select 1");
+    expect(current().sent.at(-1)).toMatchObject({ type: "query", params: [] });
+    current().reply(execOk(current().lastId()));
+    // An exec-shaped answer to a query is a protocol failure, not a result.
+    await expect(bare).rejects.toBeInstanceOf(WorkerTerminatedError);
+  });
+
+  it("times a query out like an exec: the worker is terminated", async () => {
+    const { client, current } = setup({ execTimeoutMs: 1_000 });
+    const pending = client.query("select pg_sleep(10)");
+    const first = current();
+    const caught = pending.catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(1_000);
+    const error = await caught;
+    expect(error).toBeInstanceOf(WorkerTimeoutError);
+    expect(error).toMatchObject({ timeoutMs: 1_000 });
+    expect(first.terminated).toBe(true);
+    expect(client.alive).toBe(false);
+  });
+
   it("turns a worker-side failure into SqlExecutionError with the SQLSTATE", async () => {
     const { client, current } = setup();
     const pending = client.exec("select * from missing");

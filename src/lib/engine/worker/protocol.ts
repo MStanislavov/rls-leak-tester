@@ -30,9 +30,19 @@ export interface SqlErrorInfo {
   readonly position: string | null;
 }
 
+/** A parameter of `query`. JSON (claims) travels as its text. */
+export type SqlParamValue = string | number | boolean | null;
+
 export type WorkerRequest =
   | { readonly id: number; readonly type: "init" }
-  | { readonly id: number; readonly type: "exec"; readonly sql: string };
+  | { readonly id: number; readonly type: "exec"; readonly sql: string }
+  | {
+      readonly id: number;
+      readonly type: "query";
+      readonly sql: string;
+      readonly params: readonly SqlParamValue[];
+    }
+  | { readonly id: number; readonly type: "close" };
 
 export type WorkerRequestType = WorkerRequest["type"];
 
@@ -51,18 +61,45 @@ export type WorkerResponse =
       readonly type: "exec";
       readonly results: readonly SqlResultSet[];
     }
+  | {
+      readonly id: number;
+      readonly ok: true;
+      readonly type: "query";
+      readonly result: SqlResultSet;
+    }
+  | { readonly id: number; readonly ok: true; readonly type: "close" }
   | { readonly id: number; readonly ok: false; readonly error: SqlErrorInfo };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+function isParamList(value: unknown): value is readonly SqlParamValue[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (item) =>
+        item === null ||
+        typeof item === "string" ||
+        typeof item === "boolean" ||
+        (typeof item === "number" && Number.isFinite(item)),
+    )
+  );
+}
+
+function isResultSet(value: unknown): value is SqlResultSet {
+  return isRecord(value) && Array.isArray(value.fields) && Array.isArray(value.rows);
+}
+
 export function isWorkerRequest(value: unknown): value is WorkerRequest {
   if (!isRecord(value) || typeof value.id !== "number") {
     return false;
   }
-  if (value.type === "init") {
+  if (value.type === "init" || value.type === "close") {
     return true;
+  }
+  if (value.type === "query") {
+    return typeof value.sql === "string" && isParamList(value.params);
   }
   return value.type === "exec" && typeof value.sql === "string";
 }
@@ -76,6 +113,12 @@ export function isWorkerResponse(value: unknown): value is WorkerResponse {
   }
   if (value.type === "init") {
     return isRecord(value.result) && typeof value.result.version === "string";
+  }
+  if (value.type === "close") {
+    return true;
+  }
+  if (value.type === "query") {
+    return isResultSet(value.result);
   }
   return value.type === "exec" && Array.isArray(value.results);
 }

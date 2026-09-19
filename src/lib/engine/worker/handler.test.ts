@@ -93,18 +93,88 @@ describe("createRequestHandler against a real PGlite", () => {
   }, 60_000);
 });
 
+describe("query and close against a real PGlite", () => {
+  it("runs one parameterised statement, keeps a transaction open across requests, and closes", async () => {
+    let created = 0;
+    const handle = createRequestHandler(async () => {
+      created += 1;
+      return PGlite.create();
+    });
+    await handle({
+      id: 1,
+      type: "exec",
+      sql: "create table t (id int primary key, owner text); insert into t values (1,'a'),(2,'b');",
+    });
+
+    const selected = await handle({
+      id: 2,
+      type: "query",
+      sql: "select id, owner from t where owner = $1",
+      params: ["b"],
+    });
+    expect(isWorkerResponse(selected)).toBe(true);
+    expect(selected).toMatchObject({
+      id: 2,
+      ok: true,
+      type: "query",
+      result: { rows: [[2, "b"]], affectedRows: 0 },
+    });
+    expect(structuredClone(selected)).toEqual(selected);
+
+    // One connection: BEGIN through exec leaves the following requests inside the transaction.
+    await handle({ id: 3, type: "exec", sql: "begin" });
+    const deleted = await handle({ id: 4, type: "query", sql: "delete from t", params: [] });
+    expect(deleted).toMatchObject({ ok: true, result: { affectedRows: 2 } });
+    await handle({ id: 5, type: "exec", sql: "rollback" });
+    const after = await handle({
+      id: 6,
+      type: "query",
+      sql: "select count(*)::int as n from t",
+      params: [],
+    });
+    expect(after).toMatchObject({ ok: true, result: { rows: [[2]] } });
+
+    const failed = await handle({ id: 7, type: "query", sql: "select $1::int", params: ["x"] });
+    expect(failed).toMatchObject({ id: 7, ok: false, error: { code: "22P02" } });
+
+    expect(await handle({ id: 8, type: "close" })).toEqual({ id: 8, ok: true, type: "close" });
+    // After close the next request starts a new, empty database.
+    const fresh = await handle({
+      id: 9,
+      type: "query",
+      sql: "select to_regclass('t')::text as found",
+      params: [],
+    });
+    expect(fresh).toMatchObject({ ok: true, result: { rows: [[null]] } });
+    expect(created).toBe(2);
+    await handle({ id: 10, type: "close" });
+  }, 60_000);
+});
+
+/** A scripted database: `exec` is supplied per test, `query` and `close` are recorded. */
+function scripted(exec: WorkerDatabase["exec"], log: string[] = []): WorkerDatabase {
+  return {
+    exec,
+    async query(sql, params) {
+      log.push(`query:${sql}:${JSON.stringify(params)}`);
+      return { rows: [["q"]], fields: [{ name: "c", dataTypeID: 25 }], affectedRows: 1 };
+    },
+    async close() {
+      log.push("close");
+    },
+  };
+}
+
 describe("createRequestHandler with a scripted database", () => {
   it("answers requests strictly in order", async () => {
     const order: string[] = [];
-    const db: WorkerDatabase = {
-      async exec(sql) {
-        if (sql === "slow") {
-          await new Promise((resolve) => setTimeout(resolve, 20));
-        }
-        order.push(sql);
-        return [{ rows: [["v"]], fields: [{ name: "c", dataTypeID: 25 }] }];
-      },
-    };
+    const db = scripted(async (sql) => {
+      if (sql === "slow") {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      order.push(sql);
+      return [{ rows: [["v"]], fields: [{ name: "c", dataTypeID: 25 }] }];
+    });
     const handle = createRequestHandler(async () => db);
     await Promise.all([
       handle({ id: 1, type: "exec", sql: "slow" }),
@@ -120,7 +190,7 @@ describe("createRequestHandler with a scripted database", () => {
       if (attempts === 1) {
         throw new Error("wasm failed to load");
       }
-      return { exec: async () => [{ rows: [], fields: [] }] };
+      return scripted(async () => [{ rows: [], fields: [] }]);
     });
     expect(await handle({ id: 1, type: "init" })).toMatchObject({
       ok: false,
@@ -134,11 +204,35 @@ describe("createRequestHandler with a scripted database", () => {
   });
 
   it("wraps a row that is not an array and defaults affectedRows", async () => {
-    const handle = createRequestHandler(async () => ({
-      exec: async () => [{ rows: ["scalar"], fields: [{ name: "c", dataTypeID: 25 }] }],
-    }));
+    const handle = createRequestHandler(async () =>
+      scripted(async () => [{ rows: ["scalar"], fields: [{ name: "c", dataTypeID: 25 }] }]),
+    );
     const response = await handle({ id: 1, type: "exec", sql: "x" });
     expect(response).toMatchObject({ results: [{ rows: [["scalar"]], affectedRows: 0 }] });
+  });
+
+  it("closing before anything started starts nothing, and a failing close is reported", async () => {
+    let created = 0;
+    const log: string[] = [];
+    const handle = createRequestHandler(async () => {
+      created += 1;
+      return {
+        ...scripted(async () => [{ rows: [], fields: [] }], log),
+        async close() {
+          throw new Error("close failed");
+        },
+      };
+    });
+    expect(await handle({ id: 1, type: "close" })).toEqual({ id: 1, ok: true, type: "close" });
+    expect(created).toBe(0);
+
+    await handle({ id: 2, type: "query", sql: "select $1", params: [1, "a", true, null] });
+    expect(log).toEqual(['query:select $1:[1,"a",true,null]']);
+    expect(await handle({ id: 3, type: "close" })).toMatchObject({
+      id: 3,
+      ok: false,
+      error: { message: "close failed", code: null },
+    });
   });
 });
 
@@ -186,6 +280,16 @@ describe("protocol guards", () => {
     expect(isWorkerRequest({ id: 1, type: "init" })).toBe(true);
     expect(isWorkerRequest({ id: 1, type: "exec", sql: "select 1" })).toBe(true);
     expect(isWorkerRequest({ id: 1, type: "exec" })).toBe(false);
+    expect(isWorkerRequest({ id: 1, type: "close" })).toBe(true);
+    expect(isWorkerRequest({ id: 1, type: "query", sql: "s", params: [1, "a", true, null] })).toBe(
+      true,
+    );
+    expect(isWorkerRequest({ id: 1, type: "query", sql: "s" })).toBe(false);
+    expect(isWorkerRequest({ id: 1, type: "query", params: [] })).toBe(false);
+    // Only structured-clone-safe scalars may cross: no objects, no bigint, no NaN.
+    expect(isWorkerRequest({ id: 1, type: "query", sql: "s", params: [{}] })).toBe(false);
+    expect(isWorkerRequest({ id: 1, type: "query", sql: "s", params: [1n] })).toBe(false);
+    expect(isWorkerRequest({ id: 1, type: "query", sql: "s", params: [Number.NaN] })).toBe(false);
     expect(isWorkerRequest({ id: "1", type: "init" })).toBe(false);
     expect(isWorkerRequest({ id: 1, type: "drop" })).toBe(false);
     expect(isWorkerRequest(null)).toBe(false);
@@ -200,6 +304,14 @@ describe("protocol guards", () => {
     expect(isWorkerResponse({ id: 1, ok: true, type: "init", result: {} })).toBe(false);
     expect(isWorkerResponse({ id: 1, ok: true, type: "exec", results: [] })).toBe(true);
     expect(isWorkerResponse({ id: 1, ok: true, type: "exec" })).toBe(false);
+    expect(isWorkerResponse({ id: 1, ok: true, type: "close" })).toBe(true);
+    expect(
+      isWorkerResponse({ id: 1, ok: true, type: "query", result: { fields: [], rows: [] } }),
+    ).toBe(true);
+    expect(isWorkerResponse({ id: 1, ok: true, type: "query", result: { fields: [] } })).toBe(
+      false,
+    );
+    expect(isWorkerResponse({ id: 1, ok: true, type: "query" })).toBe(false);
     expect(isWorkerResponse({ id: 1, type: "exec", results: [] })).toBe(false);
     expect(isWorkerResponse(undefined)).toBe(false);
   });

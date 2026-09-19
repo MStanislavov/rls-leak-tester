@@ -1,0 +1,74 @@
+[
+  {
+    "id": "RLS003",
+    "severity": "high",
+    "object": {
+      "kind": "policy",
+      "schema": "public",
+      "name": "projects_update",
+      "table": "projects",
+      "qualifiedName": "\"projects_update\" ON \"public\".\"projects\""
+    },
+    "title": "A policy admits every row",
+    "explanation": "WITH CHECK of this permissive policy is the constant true, so it admits every row for UPDATE, for authenticated. Permissive policies are combined with OR: a stricter policy on the same table does not narrow this one. If every row really is meant to be reachable, keep it and set the expectation to \"all\"; otherwise replace true with the condition that ties a row to its user or tenant.",
+    "docsUrl": "https://www.postgresql.org/docs/current/sql-createpolicy.html",
+    "evidence": [
+      {
+        "label": "literally true",
+        "value": "WITH CHECK"
+      },
+      {
+        "label": "command",
+        "value": "UPDATE"
+      },
+      {
+        "label": "roles",
+        "value": "authenticated"
+      },
+      {
+        "label": "using",
+        "value": "(tenant_id = current_tenant_id())"
+      },
+      {
+        "label": "with check",
+        "value": "true"
+      }
+    ]
+  },
+  {
+    "id": "RLS004",
+    "severity": "high",
+    "object": {
+      "kind": "policy",
+      "schema": "public",
+      "name": "projects_update",
+      "table": "projects",
+      "qualifiedName": "\"projects_update\" ON \"public\".\"projects\""
+    },
+    "title": "WITH CHECK is looser than USING",
+    "explanation": "WITH CHECK is the constant true while USING is a real condition: the policy limits which rows can be updated, but not what they are turned into. A user can therefore update a row they reach into one they could not reach, for example into another tenant or to another owner. Leaving WITH CHECK out is safe, Postgres then applies USING to the new row; an explicit one should be at least as strict.",
+    "docsUrl": "https://www.postgresql.org/docs/current/sql-createpolicy.html",
+    "evidence": [
+      {
+        "label": "command",
+        "value": "UPDATE"
+      },
+      {
+        "label": "roles",
+        "value": "authenticated"
+      },
+      {
+        "label": "using",
+        "value": "(tenant_id = current_tenant_id())"
+      },
+      {
+        "label": "with check",
+        "value": "true"
+      },
+      {
+        "label": "conditions of using not in with check",
+        "value": "tenant_id = current_tenant_id()"
+      }
+    ]
+  }
+]

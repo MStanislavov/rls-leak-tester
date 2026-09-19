@@ -14,6 +14,7 @@ import {
   isWorkerResponse,
   type InitResult,
   type SqlErrorInfo,
+  type SqlParamValue,
   type SqlResultSet,
   type WorkerRequest,
   type WorkerResponse,
@@ -119,6 +120,19 @@ export class PgliteWorkerClient {
     const response = await this.request({ type: "exec", sql }, timeoutMs);
     if (response.ok && response.type === "exec") {
       return response.results;
+    }
+    throw PgliteWorkerClient.failure(response);
+  }
+
+  /** Runs one statement with `$1` parameters (extended protocol). */
+  async query(
+    sql: string,
+    params: readonly SqlParamValue[] = [],
+    timeoutMs: number = this.execTimeoutMs,
+  ): Promise<SqlResultSet> {
+    const response = await this.request({ type: "query", sql, params }, timeoutMs);
+    if (response.ok && response.type === "query") {
+      return response.result;
     }
     throw PgliteWorkerClient.failure(response);
   }
