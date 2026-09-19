@@ -1,0 +1,2 @@
+# Conventional Commits (rules.yaml GIT-001). The check and its message live in the script.
+node scripts/hooks/commit-msg.mjs "$1"

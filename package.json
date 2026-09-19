@@ -11,14 +11,28 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint",
+    "lint": "eslint --max-warnings 0",
     "typecheck": "next typegen && tsc --noEmit",
+    "rules": "node scripts/rules-check.mjs",
+    "rules:fast": "node scripts/rules-check.mjs --",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "e2e": "next build && playwright test",
     "e2e:dev": "E2E_MODE=dev playwright test",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "prepare": "node scripts/hooks/install-git-hooks.mjs"
+  },
+  "lint-staged": {
+    "*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}": [
+      "prettier --write",
+      "eslint --fix --max-warnings 0 --no-warn-ignored",
+      "node scripts/rules-check.mjs --"
+    ],
+    "!(*.{js,jsx,mjs,cjs,ts,tsx,mts,cts})": [
+      "prettier --write --ignore-unknown",
+      "node scripts/rules-check.mjs --"
+    ]
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.58",

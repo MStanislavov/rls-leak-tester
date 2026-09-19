@@ -11,10 +11,11 @@
  * from `next.config.ts`, which covers the paths this proxy skips.
  */
 import { NextResponse, type NextRequest } from "next/server";
+import { isDevelopment } from "@/lib/config/runtime";
 import { buildDocumentCsp, CSP_HEADER, generateNonce } from "@/lib/security/csp";
 
-// Phase 2 moves environment access into src/lib/config; NODE_ENV is inlined at build time.
-const isDev = process.env.NODE_ENV === "development";
+// Rule ARCH-002: only src/lib/config reads the environment. NODE_ENV is inlined at build time.
+const isDev = isDevelopment();
 
 export function proxy(request: NextRequest): NextResponse {
   const nonce = generateNonce();

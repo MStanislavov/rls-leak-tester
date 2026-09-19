@@ -1,0 +1,4 @@
+# Pre-commit (brief 5.4): format and lint the staged files, then run the fast rules check on them.
+# What runs on which files is the "lint-staged" block of package.json. It stays in the range of
+# a few seconds; the full gate is `npm run quality` and CI. Husky puts node_modules/.bin on PATH.
+lint-staged

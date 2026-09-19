@@ -1,0 +1,634 @@
+# rules.yaml: the single, machine-readable source of truth for the engineering rules of
+# RLS Leak Tester. CLAUDE.md points here, hooks and CI enforce it, skills cite the rule ids.
+#
+# `npm run rules` (scripts/rules-check.mjs) validates this file against a schema and executes
+# every rule whose enforced_by includes script:scripts/rules-check.mjs. The ESLint side lives in
+# eslint.config.mjs and uses the same ids in its messages.
+#
+# enforced_by values: eslint | tsc | script:scripts/<file> | hook | sonar | ci | review |
+#                     vitest (unit and integration tests) | playwright (end to end) |
+#                     settings (.claude/settings.json permissions)
+version: 1
+
+principles:
+  - id: P1
+    statement: >-
+      Deterministic verdicts, the AI only explains. Every pass, leak and verdict comes from
+      executing SQL and comparing row sets. The LLM never decides whether something is a leak and
+      never produces a verdict; it explains a failure the engine already proved, and a proposed
+      fix is labelled verified only after the matrix was re-run with it and the failing cells pass.
+  - id: P2
+    statement: >-
+      Evidence before claims. Run the command, read its output, and only then say that it passed.
+      A check that was not just run is reported as not verified.
+  - id: P3
+    statement: >-
+      User SQL never runs on a server. It executes only inside PGlite in the user's own browser
+      tab; nothing deployed by this project loads a Postgres engine or accepts SQL to execute.
+  - id: P4
+    statement: >-
+      Zero-config local lab. With no environment variables, `npm run dev` gives a fully working
+      lab (templates, runner, static checks, export, local save). Every optional capability
+      switches on with its variables and shows a calm notice when they are absent.
+  - id: P5
+    statement: >-
+      Probes never bypass RLS. A probe never runs as a superuser, a table owner or a BYPASSRLS
+      role; it runs under the persona's role inside a transaction that is rolled back, so the
+      database is unchanged after a run.
+  - id: P6
+    statement: >-
+      Determinism. The same scenario in gives byte-identical result JSON out: stable ordering of
+      tables, personas, operations and row keys.
+  - id: P7
+    statement: >-
+      Boundaries are enforced by tools, not by intention: a pure core, thin route handlers, and
+      ports with adapters around Redis, the model and the store.
+  - id: P8
+    statement: >-
+      A gate is never weakened to get green. Tests, lint rules, coverage thresholds and the
+      quality gate stay as strict as they are, and every exclusion has a written reason here.
+  - id: P9
+    statement: >-
+      Secrets and user data stay where they belong. No secret enters the repository, SQL leaves
+      the browser only when the user presses Explain, and server logs record hashes and sizes,
+      never SQL or claims.
+
+rules:
+  # --- architecture ---------------------------------------------------------------------------
+  - id: ARCH-001
+    area: architecture
+    severity: blocker
+    statement: >-
+      src/lib/runner, src/lib/checks, src/lib/export and src/lib/scenario are pure: they load
+      nothing that touches the UI, the framework, the network, the file system or the environment.
+      By static import, type-only import, re-export, import() or require() they reach no react,
+      react-dom, next, @/app/**, @/components/**, ioredis, @supabase/*, ai, @ai-sdk/*, no
+      node:http, node:https, node:http2, node:net, node:tls, node:dgram, node:dns,
+      node:child_process or node:fs (with or without the node: prefix, subpaths included), and
+      nothing from src/lib/redis, src/lib/ai, src/lib/store or src/lib/config except the pure
+      parser src/lib/config/env (by alias or by relative path); and they do not use fetch,
+      XMLHttpRequest, WebSocket, EventSource or navigator.sendBeacon.
+    rationale: >-
+      The runner must behave identically in the browser worker and in Node tests, and a verdict
+      must never depend on the network, the framework or the UI. Importing the Redis, AI, store
+      or config-reader modules of this project would pull ioredis, the model SDK, Supabase and
+      process.env in transitively, so they are banned by path as well as by package.
+    enforced_by: [eslint, vitest]
+    check: "eslint.config.mjs block rules/arch-001: no-restricted-imports, no-restricted-globals, no-restricted-syntax on src/lib/{runner,checks,export,scenario}/**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}, test files included; tests/eslint/boundaries.test.ts lints a violating snippet per module, per directory and per import form and expects severity 2"
+  - id: ARCH-002
+    area: architecture
+    severity: blocker
+    statement: >-
+      Only src/lib/config reads process.env; every other file under src/ receives configuration
+      as typed values and does not touch the process object at all, because an alias of it
+      (const p = process) reads the environment where no tool can see it.
+    rationale: >-
+      One validated reader keeps configuration typed, testable and free of scattered defaults,
+      and it keeps secrets out of client bundles by construction.
+    enforced_by: [eslint, vitest]
+    check: "eslint.config.mjs blocks rules/arch-002 and rules/arch-001: process.env in every spelling and the process module (import, import() and require()) through no-restricted-syntax and no-restricted-imports, the identifier process itself through no-restricted-globals, and globalThis.process / global.process / const { process } = globalThis through no-restricted-syntax, on src/**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts} except src/lib/config/**; see exclusions with rule ARCH-002; tests/eslint/boundaries.test.ts proves every spelling and every alias in every scope, CommonJS included. Known limit: an alias of globalThis itself (const g = globalThis; g.process) is not seen"
+  - id: ARCH-003
+    area: architecture
+    severity: major
+    statement: >-
+      Route handlers under src/app are thin: they parse the input, call src/lib and respond, and
+      a route.ts is never longer than thresholds.architecture.route_handler_max_lines lines.
+    rationale: >-
+      Business logic in a handler cannot be unit-tested without the framework and escapes the
+      coverage threshold on src/lib.
+    enforced_by: [review, "script:scripts/rules-check.mjs"]
+    check: "src/app/**/route.{ts,tsx,js,mjs}: line count <= thresholds.architecture.route_handler_max_lines"
+  - id: ARCH-004
+    area: architecture
+    severity: major
+    statement: src/lib/** never imports from @/app/** or @/components/**, by alias or by relative path.
+    rationale: >-
+      Dependencies point from the UI into the library. A library that imports the UI cannot run
+      in the worker, in Node tests or in the exported CI check.
+    enforced_by: [eslint, vitest]
+    check: "eslint.config.mjs blocks rules/arch-004 and rules/config-dir: no-restricted-imports, plus no-restricted-syntax for import() and require(), on src/lib/**; tests/eslint/boundaries.test.ts"
+
+  # --- code -----------------------------------------------------------------------------------
+  - id: CODE-001
+    area: code
+    severity: major
+    statement: There is no explicit `any` in src/lib/**.
+    rationale: An `any` switches the type checker off exactly where the verdict logic lives.
+    enforced_by: [eslint, vitest]
+    check: "eslint.config.mjs block rules/code-001-code-002: @typescript-eslint/no-explicit-any: error on src/lib/**; tests/eslint/boundaries.test.ts expects severity 2"
+  - id: CODE-002
+    area: code
+    severity: major
+    statement: There is no non-null assertion (`!`) in src/lib/**.
+    rationale: >-
+      A non-null assertion is an unchecked claim; with noUncheckedIndexedAccess on, the honest
+      form is a guard that handles the missing value.
+    enforced_by: [eslint, vitest]
+    check: "eslint.config.mjs block rules/code-001-code-002: @typescript-eslint/no-non-null-assertion: error on src/lib/**; tests/eslint/boundaries.test.ts expects severity 2"
+  - id: CODE-003
+    area: code
+    severity: major
+    statement: >-
+      TypeScript strict mode stays on: tsconfig.json has compilerOptions.strict true and switches
+      off no member of the strict family.
+    rationale: Strict mode is the cheapest proof the project has; loosening it hides real defects.
+    enforced_by: [tsc, "script:scripts/rules-check.mjs"]
+    check: "tsconfig.json: compilerOptions.strict === true and no strict-family flag set to false; `npm run typecheck`"
+
+  # --- security -------------------------------------------------------------------------------
+  - id: SEC-001
+    area: security
+    severity: blocker
+    statement: >-
+      Nothing is rendered as HTML: no dangerouslySetInnerHTML anywhere, and no innerHTML,
+      outerHTML, insertAdjacentHTML or document.write under src/.
+    rationale: >-
+      Scenario text and query results are attacker-controlled the moment a scenario is shared;
+      rendered as text they are harmless.
+    enforced_by: [eslint, "script:scripts/rules-check.mjs", vitest]
+    check: "react/no-danger and no-restricted-syntax: error on every code file (eslint.config.mjs blocks rules/sec-001 and rules/sec-001-react; tests/eslint/boundaries.test.ts); script pattern over src/**: dangerouslySetInnerHTML\\s*[=:] | .innerHTML = | .outerHTML = | insertAdjacentHTML( | document.write("
+  - id: SEC-002
+    area: security
+    severity: blocker
+    statement: >-
+      Every external input (request and response bodies in any form, form data, query and route
+      parameters, headers and cookies, the arguments of a Server Function, localStorage payloads,
+      scenario JSON, environment variables) is validated with a zod schema before it is used.
+    rationale: >-
+      Types vanish at run time. A boundary that is not parsed is a boundary that trusts the
+      caller, and a Server Function is an HTTP endpoint whose caller chooses every argument,
+      whatever its TypeScript signature says.
+    enforced_by: [review, "script:scripts/rules-check.mjs"]
+    check: 'src/** (tests excluded): a file that reads .json() / .formData() / .text() / .arrayBuffer() / .blob() / .bytes() / JSON.parse( / localStorage.getItem( / sessionStorage.getItem( / .headers.get( / headers().get( / .cookies.get( / cookies().get( / document.cookie / .get( , .getAll( , .entries( or .values( on a name ending in formData or searchParams / Object.fromEntries(formData) (in a route.ts also searchParams or params), or that has a "use server" directive at file or function level and an async function that takes a parameter, must call .safeParse( / .parse( or a parse* / validate* function imported from src/lib. Known limits: per file, not per value; a header or form object kept under another name first is not seen'
+  - id: SEC-003
+    area: security
+    severity: blocker
+    statement: >-
+      No secret is in the repository: git tracks no .env* file except .env.example, every value
+      in .env.example is empty, and no file holds a string shaped like an Anthropic key, a
+      Supabase token or secret key, a service_role JWT, a Redis URL with a password, a GitHub or
+      SonarQube token, or a private key block.
+    rationale: The repository is public; a committed secret is a leaked secret and must be rotated.
+    enforced_by: ["script:scripts/rules-check.mjs", hook, settings]
+    check: "git ls-files (names only, real env files are never read); .env.example values; key-shaped patterns in every text file. Placeholder passwords (<password>, ${VAR}) and reserved hosts (localhost, *.example, example.com, *.test) are not secrets. Hooks: scripts/hooks/pre-edit.sh (PreToolUse) blocks every edit of .env and .env.* except .env.example; lint-staged runs this script on the staged files. Settings: .claude/settings.json permissions.deny has Read and Edit rules for the real env files"
+  - id: SEC-004
+    area: security
+    severity: blocker
+    statement: >-
+      The server never executes user SQL. A Postgres engine (@electric-sql/pglite, pg, another
+      Postgres driver) or src/lib/engine is imported only by src/lib/engine, a client module that
+      starts with "use client", and tests; never by a route handler, by src/app/api, src/lib/ai,
+      src/lib/redis or src/lib/store, or by a file with a "use server" directive (a Server
+      Function), wherever that file lives; and never by src/lib/runner, which takes the SqlEngine
+      port as a parameter.
+    rationale: >-
+      User SQL is untrusted code. It runs in the sandboxed WASM Postgres of the user's own tab
+      and nowhere else (P3). The allow-list is closed under imports: whatever may hold an engine
+      is either under src/lib/engine, which nothing outside the list may import, or a "use client"
+      module, of which the server only gets a reference it cannot call. A runner that held an
+      engine would break that, because nothing stops a route handler from importing the runner.
+    enforced_by: ["script:scripts/rules-check.mjs"]
+    check: 'src/** (tests excluded), value imports (static, re-export, import(), require(); type-only imports allowed) of @electric-sql/pglite, pg, pg-*, postgres, @vercel/postgres, @neondatabase/serverless or a path under src/lib/engine. Allow-list: src/lib/engine/** and a file whose first statement is "use client"; nothing else, src/lib/runner/** included (its integration tests against PGlite are test files). Always refused: src/app/**/route.ts, src/app/api/**, src/lib/{ai,redis,store}/**, and any file with a "use server" directive at file or function level'
+  - id: SEC-005
+    area: security
+    severity: major
+    statement: >-
+      The security headers and the strict production Content-Security-Policy stay on: the
+      production policy built in src/lib/security/csp.ts has no 'unsafe-eval' and no script
+      'unsafe-inline', src/proxy.ts sets it on every response and next.config sends the static
+      security headers on every path.
+    rationale: >-
+      The lab executes shared, untrusted SQL next to the user's session; the CSP is what keeps a
+      rendering bug from becoming script execution.
+    enforced_by: ["script:scripts/rules-check.mjs", playwright]
+    check: "src/lib/security/csp.ts: 'unsafe-eval' only under an `if (isDev)` guard, 'unsafe-inline' only next to style-src; no 'unsafe-*' literal in src/proxy.ts or next.config.*; src/proxy.ts calls buildDocumentCsp(, next.config.* calls buildStaticSecurityHeaders(; e2e/ asserts the header on a production build"
+  - id: RUN-001
+    area: security
+    severity: blocker
+    statement: >-
+      Every probe runs with the persona's role set (set_config('role', ...) or SET LOCAL ROLE)
+      inside a transaction that is rolled back, and bypass-guard tests prove that a probe never
+      runs as a superuser, a table owner or a BYPASSRLS role.
+    rationale: >-
+      The engine's default user is a superuser, and RLS does not apply to superusers, owners
+      without FORCE, or BYPASSRLS roles. A probe that forgets the role passes every leaky scenario.
+    enforced_by: [vitest, "script:scripts/rules-check.mjs"]
+    check: "once src/lib/runner holds code, a *bypass-guard*.test.ts exists under src/lib/runner or tests/, has at least one test and no .skip / .todo / .only"
+
+  # --- testing --------------------------------------------------------------------------------
+  - id: TEST-001
+    area: testing
+    severity: blocker
+    statement: >-
+      Tests make no real network or model calls: a test file contains no call to a non-loopback
+      http(s) or ws(s) URL and does not import a real model provider unless it mocks it or sits
+      behind RUN_LIVE_AI_TESTS=1, and at run time every Vitest test file runs under a network
+      guard that refuses any connection that is not loopback unless RUN_LIVE_AI_TESTS=1 was set
+      by whoever started the run; no test, setup file, configuration or npm script sets it.
+    rationale: Hermetic tests are deterministic, free, and safe to run on a fork without secrets.
+    enforced_by: ["script:scripts/rules-check.mjs", vitest]
+    check: 'static, **/*.{test,spec}.*, tests/**, e2e/**: fetch( / goto( / request.get( / http.request( / new WebSocket( / new EventSource( with a non-loopback URL given as a literal, as new URL(literal), or through a constant of the same file (NAME, NAME + ..., `${NAME}...`); value import of @ai-sdk/anthropic or @anthropic-ai/sdk without vi.mock of it or a RUN_LIVE_AI_TESTS guard; a write to the live switch (.RUN_LIVE_AI_TESTS = , ["RUN_LIVE_AI_TESTS"] = , ||= , ??= , vi.stubEnv("RUN_LIVE_AI_TESTS" , Object.assign(process.env, { RUN_LIVE_AI_TESTS ); package.json: no script or lint-staged command contains RUN_LIVE_AI_TESTS= . Run time: vitest.config.* test.setupFiles contains ./tests/setup/network-guard.setup.ts and the configuration does not name RUN_LIVE_AI_TESTS; the setup file calls failOnBlockedAttempts( and installNetworkGuard(process.env), literally and with no other argument; the guard reads the switch once, when it is installed, so a test that sets it afterwards lifts nothing (fetch, WebSocket, EventSource, XMLHttpRequest and net.Socket.prototype.connect; a swallowed attempt still fails the test); tests/setup/network-guard.test.ts proves both. Playwright blocks foreign requests in e2e/support/page-guard.ts'
+  - id: TEST-002
+    area: testing
+    severity: major
+    statement: >-
+      Coverage of src/lib/** is at least 80 percent lines and 80 percent branches, enforced by the
+      Vitest thresholds and again by the quality gate.
+    rationale: src/lib decides verdicts; untested branches there are unproven verdicts.
+    enforced_by: [vitest, sonar, "script:scripts/rules-check.mjs"]
+    check: "vitest.config.mts: coverage.include contains src/lib/**, every coverage.thresholds lines and branches value >= thresholds.coverage; `npm run test:coverage`"
+
+  # --- redis ----------------------------------------------------------------------------------
+  - id: REDIS-001
+    area: redis
+    severity: blocker
+    statement: >-
+      Every Redis key is built by the single key builder src/lib/redis/keys.ts with the scheme
+      rlsleak:{env}:{purpose}:{id}, every write sets a TTL, and only the adapters under
+      src/lib/redis/adapters talk to the ioredis client.
+    rationale: >-
+      A shared or managed Redis must never fill up with keys nobody owns; one builder and one
+      place for writes make the TTL contract testable on both adapters.
+    enforced_by: ["script:scripts/rules-check.mjs", vitest]
+    check: "src/** (tests excluded): no literal rlsleak: outside src/lib/redis/keys.ts; no value import of ioredis outside src/lib/redis; no .set( / .hset( / .incr( / … outside src/lib/redis/adapters; in an adapter that imports ioredis every .set( carries PX or EX and every other write has an expire in the same file; Lua writes need PEXPIRE or EXPIRE; the adapter contract suite checks TTLs at run time"
+  - id: REDIS-002
+    area: redis
+    severity: blocker
+    statement: >-
+      Every route.ts that uses Redis (it imports from @/lib/redis, @/lib/ai, @/lib/store or
+      ioredis) declares `export const runtime = "nodejs"`.
+    rationale: >-
+      ioredis needs TCP sockets. Node.js is the default runtime in Next.js 16 and Edge is
+      deprecated, so the explicit export documents the dependency and blocks a later switch.
+    enforced_by: ["script:scripts/rules-check.mjs"]
+    check: 'src/app/**/route.ts with a value import resolving to src/lib/{redis,ai,store} or ioredis: /export const runtime = ["'']nodejs["'']/'
+
+  # --- ai -------------------------------------------------------------------------------------
+  - id: AI-001
+    area: ai
+    severity: major
+    statement: >-
+      The Claude model id is defined in exactly one module, src/lib/ai/model.ts; no other file
+      under src/ contains a model id literal.
+    rationale: >-
+      The model id is part of the explanation cache key and changes often; one definition keeps
+      the cache, the override variable and the documentation in step.
+    enforced_by: ["script:scripts/rules-check.mjs"]
+    check: "src/** except src/lib/ai/model.ts, tests and comments excluded: /claude-(opus|sonnet|haiku|fable|instant|[0-9])[\\w.-]*/; src/lib/ai/model.ts exists once src/lib/ai holds code"
+  - id: AI-002
+    area: ai
+    severity: blocker
+    statement: >-
+      The LLM never decides a verdict, and a proposed fix is labelled verified only after the
+      matrix was re-run with it, the failing cells pass and nothing else regressed.
+    rationale: This is principle P1; a model that grades its own fix is not evidence.
+    enforced_by: [vitest, review]
+    check: "tests of the verified-fix loop: a proposed fix that does not pass the re-run is shown as not passing"
+
+  # --- quality --------------------------------------------------------------------------------
+  - id: QUAL-001
+    area: quality
+    severity: major
+    statement: >-
+      Every lint, coverage and Sonar exclusion is listed under exclusions in this file with a
+      written reason, and every inline suppression (eslint-disable, @ts-expect-error, a coverage
+      ignore hint, a Sonar suppression) states its reason in the same comment.
+    rationale: >-
+      An exclusion is a decision not to measure something. It has to be visible and defensible,
+      never a quiet way to make a number look better.
+    enforced_by: ["script:scripts/rules-check.mjs"]
+    check: "two-way comparison of exclusions with eslint.config.mjs (globalIgnores, ignores, rules set to off), vitest.config.mts (test.exclude, coverage.exclude), sonar-project.properties when it exists, and the skip list of scripts/rules-check/repo.mjs; .prettierignore is exempt; @ts-ignore and @ts-nocheck are forbidden"
+  - id: QUAL-002
+    area: quality
+    severity: blocker
+    statement: >-
+      A test, a lint rule, a coverage threshold or the quality gate is never weakened, skipped or
+      deleted to get to green.
+    rationale: A gate that bends when it fails measures nothing.
+    enforced_by: [review, settings, "script:scripts/rules-check.mjs", vitest]
+    check: "script: in eslint.config.* none of no-restricted-imports, no-restricted-syntax, no-restricted-globals, react/no-danger, @typescript-eslint/no-explicit-any, @typescript-eslint/no-non-null-assertion is set to off, warn, 0 or 1, and each of them is named only inside the blocks rules/sec-001, rules/sec-001-react, rules/arch-002, rules/arch-004, rules/code-001-code-002, rules/config-dir and rules/arch-001, each of which exists exactly once (flat config replaces rule options, so any other block that names one, even as error, drops the bans for the files it matches); in package.json every eslint command of scripts and lint-staged carries --max-warnings 0, scripts.test is vitest run and scripts.test:coverage is vitest run --coverage, with reporting flags at most (no file filter, --exclude, --dir, --config, --project, -t, --coverage.* override); the suites this file names as an enforcer (tests/eslint/boundaries.test.ts, tests/setup/network-guard.test.ts, tests/hooks/governance.test.ts) exist, hold a test, carry no .skip / .todo / .only, vitest.config.* test.include contains src/**/*.test.{ts,tsx} and tests/**/*.test.ts, and no test.exclude pattern matches one of them; vitest: tests/eslint/boundaries.test.ts fails on a downgraded rule, a smaller scope, a missing block, a block outside the named ones that names a governed rule, and on any real code file whose resolved rule options differ from what the named block of its scope declares; review of every diff that touches eslint.config.mjs, vitest.config.mts, tsconfig.json, sonar-project.properties, rules.yaml thresholds or a test expectation; the schema of this file refuses lower thresholds; .claude/settings.json permissions.deny: git commit --no-verify and -n, which would skip the pre-commit and commit-msg hooks, also inside a cluster of short flags (-nm, -anm, -snm, -qnm, -vnm), first or later on the line; tests/hooks/governance.test.ts runs a table of such commands against the documented rule matching"
+
+  # --- git ------------------------------------------------------------------------------------
+  - id: GIT-001
+    area: git
+    severity: minor
+    statement: "Commit messages follow Conventional Commits: type(scope)?: subject."
+    rationale: The history is read by people and by the release skill; a fixed shape keeps both working.
+    enforced_by: [hook]
+    check: ".husky/commit-msg runs scripts/hooks/commit-msg.mjs on the first line that is not a comment: /^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\\([\\w./-]+\\))?!?: \\S.*$/; merge commits (subject starting with 'Merge ') pass"
+  - id: GIT-002
+    area: git
+    severity: blocker
+    statement: >-
+      An agent session never pushes, never forces anything in git, never rewrites history and
+      never runs a deployment CLI (vercel, supabase db push, supabase link).
+    rationale: >-
+      Publishing and deploying are the owner's decisions. An agent prepares the work and the
+      instructions; the owner performs them.
+    enforced_by: [settings, review]
+    check: ".claude/settings.json permissions.deny: git push, git remote add and set-url, reset --hard, rebase, filter-branch, filter-repo, commit --amend, forced add (add -f, --force and the clusters -fA, -Af, -uf, -vf, first or later on the line; a forced add is how a git-ignored env file gets staged), tag -f and --force, branch -f and --force, clean, forced checkout and switch (-f and --force, first or later on the line), branch -D, update-ref, reflog expire and delete; vercel; supabase login, link, db push, db reset --linked, migration repair, migration up --linked, functions deploy, secrets set, config push, projects create and delete (also through npx). Bash rules match the command text only, so review stays the second enforcer"
+
+  # --- docs -----------------------------------------------------------------------------------
+  - id: DOCS-001
+    area: docs
+    severity: minor
+    statement: Every decision that deviates from the build brief has an ADR under docs/adr/.
+    rationale: When the brief and reality disagree, reality wins, and the next session must be able to see why.
+    enforced_by: [review]
+    check: "docs/adr/NNNN-slug.md: context, decision, evidence, consequences"
+
+thresholds:
+  coverage:
+    scope: "src/lib/**"
+    lines_min_percent: 80
+    branches_min_percent: 80
+  duplication:
+    duplicated_lines_max_percent: 3
+  quality_gate:
+    name: RLS Leak Tester
+    project_key: postgres-rls-leak-tester
+    applies_to: [overall_code, new_code]
+    reliability_rating: A
+    security_rating: A
+    maintainability_rating: A
+    security_hotspots_reviewed_min_percent: 100
+    blocker_issues_max: 0
+    critical_issues_max: 0
+  architecture:
+    route_handler_max_lines: 80
+  runner:
+    probe_timeout_ms: 5000
+    run_ceiling_ms: 60000
+  ai:
+    explain_payload_max_bytes: 30720
+    explanation_cache_ttl_seconds: 604800
+    single_flight_lock_ttl_ms: 30000
+  redis:
+    key_scheme: "rlsleak:{env}:{purpose}:{id}"
+    scenario_cache_ttl_seconds: 60
+  rate_limits:
+    explain:
+      window_seconds: 60
+      per_ip: 5
+      per_user: 10
+    scenario_writes:
+      window_seconds: 60
+      per_ip: 20
+      per_user: 30
+
+exclusions:
+  # --- ESLint: eslint.config.mjs ---------------------------------------------------------------
+  - tool: eslint
+    pattern: ".next/**"
+    source: eslint.config.mjs
+    reason: Build output of Next.js, generated on every build and never edited by hand.
+  - tool: eslint
+    pattern: "out/**"
+    source: eslint.config.mjs
+    reason: Static export output of Next.js; generated, a default ignore of eslint-config-next.
+  - tool: eslint
+    pattern: "build/**"
+    source: eslint.config.mjs
+    reason: Generic build output directory; generated, a default ignore of eslint-config-next.
+  - tool: eslint
+    pattern: next-env.d.ts
+    source: eslint.config.mjs
+    reason: Written and rewritten by Next.js; editing it is pointless and it is git-ignored.
+  - tool: eslint
+    pattern: "coverage/**"
+    source: eslint.config.mjs
+    reason: Coverage report written by Vitest (HTML, LCOV); generated output, not source.
+  - tool: eslint
+    pattern: "playwright-report/**"
+    source: eslint.config.mjs
+    reason: HTML report written by Playwright, including bundled third-party scripts; generated.
+  - tool: eslint
+    pattern: "test-results/**"
+    source: eslint.config.mjs
+    reason: Traces and attachments written by Playwright on failure; generated output.
+  - tool: eslint
+    pattern: ".scannerwork/**"
+    source: eslint.config.mjs
+    reason: Working directory of the Sonar scanner; generated output.
+  - tool: eslint
+    rule: ARCH-002
+    pattern: "src/lib/config/**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}"
+    source: eslint.config.mjs
+    reason: >-
+      Not a gap but the rule itself: src/lib/config is the one module that reads process.env, so
+      the ARCH-002 block skips it. ARCH-004 and the src/lib rules still apply to it.
+
+  # --- Vitest: vitest.config.mts ---------------------------------------------------------------
+  - tool: vitest
+    pattern: "node_modules/**"
+    source: vitest.config.mts
+    reason: Third-party packages ship their own test files; they are not this project's tests.
+  - tool: vitest
+    pattern: ".next/**"
+    source: vitest.config.mts
+    reason: Build output can contain copies of source files; they must not be collected as tests.
+  - tool: vitest
+    pattern: "e2e/**"
+    source: vitest.config.mts
+    reason: Playwright specs need a running server and a browser; they run under `npm run e2e`.
+  - tool: vitest-coverage
+    pattern: "src/lib/**/*.test.{ts,tsx}"
+    source: vitest.config.mts
+    reason: Test files are not product code; counting them would inflate the coverage figure.
+  - tool: vitest-coverage
+    pattern: "src/lib/**/*.d.ts"
+    source: vitest.config.mts
+    reason: Declaration files contain no executable code, so there is nothing to cover.
+  - tool: coverage-scope
+    pattern: "src/app/**"
+    source: vitest.config.mts
+    reason: >-
+      Routes, layouts and pages are thin by rule (ARCH-003) and are exercised by the Playwright
+      suite, not by unit tests; the 80 percent threshold applies to src/lib/** only.
+  - tool: coverage-scope
+    pattern: "src/components/**"
+    source: vitest.config.mts
+    reason: >-
+      UI components are exercised by the Playwright flows and the accessibility scan; logic that
+      needs unit tests belongs in src/lib.
+
+  # --- Sonar: sonar-project.properties (planned for phase 8; compared once the file exists) ----
+  - tool: sonar
+    pattern: "e2e/**"
+    source: sonar-project.properties
+    reason: >-
+      Planned. Playwright specs are neither product source nor unit tests; analysing them as
+      sources would distort duplication and coverage.
+  - tool: sonar
+    pattern: next-env.d.ts
+    source: sonar-project.properties
+    reason: Planned. Generated by Next.js and git-ignored; not code anybody maintains.
+  - tool: sonar-coverage
+    pattern: "src/app/**"
+    source: sonar-project.properties
+    reason: >-
+      Planned. Covered by Playwright rather than unit tests, and LCOV from Vitest cannot see that;
+      same scope as the Vitest threshold.
+  - tool: sonar-coverage
+    pattern: "src/components/**"
+    source: sonar-project.properties
+    reason: >-
+      Planned. Covered by Playwright rather than unit tests, and LCOV from Vitest cannot see that;
+      same scope as the Vitest threshold.
+
+  # --- The rules check itself: scripts/rules-check/repo.mjs -----------------------------------
+  - tool: rules-check
+    pattern: .git
+    source: scripts/rules-check/repo.mjs
+    reason: Git's object database is not working-tree content and is never committed as files.
+  - tool: rules-check
+    pattern: node_modules
+    source: scripts/rules-check/repo.mjs
+    reason: Third-party packages, git-ignored; their code is not governed by these rules.
+  - tool: rules-check
+    pattern: .next
+    source: scripts/rules-check/repo.mjs
+    reason: Build output of Next.js, git-ignored; it contains bundled copies of everything.
+  - tool: rules-check
+    pattern: out
+    source: scripts/rules-check/repo.mjs
+    reason: Static export output of Next.js, git-ignored and generated.
+  - tool: rules-check
+    pattern: build
+    source: scripts/rules-check/repo.mjs
+    reason: Generic build output directory at the repository root, git-ignored and generated.
+  - tool: rules-check
+    pattern: coverage
+    source: scripts/rules-check/repo.mjs
+    reason: Coverage report written by Vitest, git-ignored and generated.
+  - tool: rules-check
+    pattern: playwright-report
+    source: scripts/rules-check/repo.mjs
+    reason: HTML report written by Playwright, git-ignored and generated.
+  - tool: rules-check
+    pattern: test-results
+    source: scripts/rules-check/repo.mjs
+    reason: Traces written by Playwright, git-ignored and generated.
+  - tool: rules-check
+    pattern: .scannerwork
+    source: scripts/rules-check/repo.mjs
+    reason: Working directory of the Sonar scanner, git-ignored and generated.
+
+  # --- Scopes of single rules -----------------------------------------------------------------
+  - tool: rule-scope
+    rule: ARCH-002
+    pattern: next.config.ts
+    reason: >-
+      Outside src/. It runs in Node before the app exists and reads NODE_ENV to choose the
+      development or production security headers; it cannot import the app's config module.
+  - tool: rule-scope
+    rule: ARCH-002
+    pattern: playwright.config.ts
+    reason: Outside src/. Test tooling that reads E2E_MODE and CI to choose the server and retries.
+  - tool: rule-scope
+    rule: ARCH-002
+    pattern: vitest.config.mts
+    reason: Outside src/. Test tooling configuration, listed so that the scope of ARCH-002 is explicit.
+  - tool: rule-scope
+    rule: ARCH-002
+    pattern: "scripts/**"
+    reason: Outside src/. Developer and CI scripts run in a shell and take their input from its environment.
+  - tool: rule-scope
+    rule: ARCH-002
+    pattern: "tests/**"
+    reason: Outside src/. Integration suites read REDIS_URL and RUN_LIVE_AI_TESTS to decide what to run.
+  - tool: rule-scope
+    rule: ARCH-002
+    pattern: "e2e/**"
+    reason: Outside src/. Playwright specs read E2E_MODE to know which Content-Security-Policy to expect.
+  - tool: rule-scope
+    rule: SEC-002
+    pattern: "**/*.{test,spec}.{ts,tsx}"
+    reason: Tests build their own inputs; the boundary they exercise is the code under test.
+  - tool: rule-scope
+    rule: SEC-004
+    pattern: "**/*.{test,spec}.{ts,tsx}"
+    reason: >-
+      Tests are not the server. The store's own policies are proven against PGlite in a test,
+      which is the point of the self-isolation template.
+  - tool: rule-scope
+    rule: REDIS-001
+    pattern: "**/*.{test,spec}.{ts,tsx}"
+    reason: The contract tests assert the literal key shape and drive the client directly.
+  - tool: rule-scope
+    rule: AI-001
+    pattern: "**/*.{test,spec}.{ts,tsx}"
+    reason: Tests pin model ids as fixtures to prove the override and the cache key.
+  - tool: rule-scope
+    rule: TEST-001
+    pattern: "loopback URLs (localhost, 127.0.0.1, 0.0.0.0, [::1])"
+    reason: >-
+      The Playwright suite and the Redis contract suite talk to servers this machine started;
+      that is not a real network call.
+
+forbidden_actions:
+  - id: FA-1
+    statement: >-
+      Deploy anything, run the Vercel or Supabase CLIs against a real project, configure DNS,
+      create or log into any external account, or spend money. Prepare the instructions; the
+      owner performs them.
+  - id: FA-2
+    statement: Push, add a remote, force anything in git, or rewrite history.
+  - id: FA-3
+    statement: >-
+      Read, create or print real environment files or secrets (.env, .env.local, .env.sonar), or
+      make real model or network calls from tests.
+  - id: FA-4
+    statement: Execute user-supplied SQL on any server built for production.
+  - id: FA-5
+    statement: Let the LLM decide a verdict, or present an unverified fix as verified.
+  - id: FA-6
+    statement: >-
+      Weaken a test, a lint rule, a coverage threshold or the quality gate to get to green, or
+      add an exclusion without a written reason in this file.
+  - id: FA-7
+    statement: Claim that a check passed without having just run it.
+
+definition_of_done:
+  - id: DOD-1
+    statement: >-
+      With no environment variables, the lab runs: templates, runner, static checks, export,
+      local save.
+  - id: DOD-2
+    statement: >-
+      Each leaky template reports LEAKING with exactly the expected cells; each fixed template
+      reports ISOLATED; the results are deterministic.
+  - id: DOD-3
+    statement: >-
+      Probes provably never run as a superuser, an owner or a BYPASSRLS role, and leave the
+      database unchanged.
+  - id: DOD-4
+    statement: The exported SQL passes on the fixed variants and fails on the leaky ones when executed.
+  - id: DOD-5
+    statement: The app's own RLS is a template and is proven by its own exported test.
+  - id: DOD-6
+    statement: >-
+      Redis backs the rate limiter, cache, lock and scenario cache behind ports, with a contract
+      suite on both adapters; the fail-closed behaviour is tested.
+  - id: DOD-7
+    statement: >-
+      The explain endpoint streams structured output, is limited, cached and deduplicated, and a
+      fix is labelled verified only after a re-run.
+  - id: DOD-8
+    statement: >-
+      Coverage of src/lib is at least 80 percent; lint, type-check and rules check are clean; the
+      production build succeeds with the CSP active.
+  - id: DOD-9
+    statement: >-
+      The SonarQube gate "RLS Leak Tester" exists with the conditions of thresholds.quality_gate
+      and the project passes it, or the report says exactly why it could not be run.
+  - id: DOD-10
+    statement: >-
+      rules.yaml, CLAUDE.md, .claude/settings.json with tested hooks, six skills and the reviewer
+      agent exist and agree with each other.
+  - id: DOD-11
+    statement: >-
+      docs/DEPLOY.md lets the owner go live, custom domain and DNS included, without asking
+      anything.
+  - id: DOD-12
+    statement: No secrets, no pushes, no deployments, no external accounts touched.

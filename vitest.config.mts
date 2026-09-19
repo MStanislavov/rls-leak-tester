@@ -13,6 +13,9 @@ export default defineConfig({
     environment: "node",
     include: ["src/**/*.test.{ts,tsx}", "tests/**/*.test.ts"],
     exclude: ["node_modules/**", ".next/**", "e2e/**"],
+    // TEST-001 at run time: blocks every connection that is not loopback unless
+    // RUN_LIVE_AI_TESTS=1. The rules check refuses a config without it.
+    setupFiles: ["./tests/setup/network-guard.setup.ts"],
     // An empty suite is not an error; the coverage thresholds below still
     // apply to every run that collects coverage.
     passWithNoTests: true,

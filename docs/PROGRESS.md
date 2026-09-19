@@ -117,3 +117,50 @@ reviewer agent (two rounds: round 1 found five gaps, all closed and re-verified 
 - `npm audit`: high-severity `adm-zip` advisory via dev-only `@sonar/scan`; revisit in Phase 8.
 - `src/proxy.ts` and `next.config.ts` read `process.env.NODE_ENV`; the Phase 2 rule "only
   `src/lib/config` reads `process.env`" must handle these two files explicitly.
+
+## Phase 2: governance (2026-09-19)
+
+### Done
+
+- `src/lib/config`: the only reader of `process.env`; zod-validated, lazy, never prints values;
+  feature flags (`explainEnabled` is false in production without `REDIS_URL`); edge-safe
+  `runtime.ts` for `src/proxy.ts`. 100 percent covered.
+- ESLint boundaries as errors with rule ids in the messages (ARCH-001, ARCH-002, ARCH-004,
+  CODE-001, CODE-002, SEC-001), `eslint --max-warnings 0`.
+- `docker-compose.yml`: `redis:7-alpine` (no persistence, healthcheck) and `sonarqube:community`
+  (native arm64, named volumes). Redis start and healthcheck proven; SonarQube starts in Phase 8.
+- `rules.yaml` (principles, 24 rules, thresholds, exclusions with reasons, forbidden actions,
+  definition of done) and `scripts/rules-check.mjs` (schema validation, 15 script rules, full and
+  fast mode), with a violating and a clean fixture per script rule.
+- A Vitest network guard (`tests/setup/network-guard.setup.ts`) blocks non-loopback connections in
+  tests unless `RUN_LIVE_AI_TESTS=1` (TEST-001).
+- `CLAUDE.md`, `.claude/settings.json` (allow/deny lists, pre-edit and post-edit hooks in
+  `scripts/hooks/`), `.claude/agents/security-reviewer.md` (read-only), Husky with lint-staged and a
+  conventional-commit `commit-msg` hook. Hooks were exercised with piped payloads and with three
+  real headless `claude -p` sessions.
+- ADRs 0004 to 0008.
+
+### Verified (orchestrator re-run after the last change)
+
+| Command                 | Result                                                          |
+| ----------------------- | --------------------------------------------------------------- |
+| `npm run format:check`  | exit 0                                                          |
+| `npm run lint`          | exit 0, zero warnings                                           |
+| `npm run typecheck`     | exit 0                                                          |
+| `npm run rules`         | `rules-check (full): ok, 15 script rules, 111 files`            |
+| `npm run test:coverage` | 20 files, 632 tests passed; lines 96.13, branches 98.14 percent |
+
+Independent mutation testing (three review rounds): 24 deliberate violations caught by the named
+enforcer.
+
+### Open issues (accepted or scheduled)
+
+- Scheduled with Phase 3: SEC-002 must also treat `params` / `searchParams` in pages as input;
+  ARCH-001 / ARCH-004 must resolve relative imports that pass through an intermediate directory and
+  the computed-member spellings of the network globals.
+- Accepted as known limits (the rules guard against accidents, review guards against intent):
+  abbreviated git long options in the permission deny list, package.json script pinning beyond the
+  test scripts, Vitest config keys that skip tests, network access from worker threads or child
+  processes started by a test, a Pages Router directory (the project is App Router only).
+- Still open from Phase 1: `npm audit` advisory via dev-only `@sonar/scan` (Phase 8); boot-time
+  config validation through `src/instrumentation.ts` (Phase 6, with the first server route).

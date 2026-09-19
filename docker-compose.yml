@@ -1,0 +1,66 @@
+# Local services for RLS Leak Tester. Neither is needed to run the lab itself.
+#
+#   docker compose up -d redis        Redis only (set REDIS_URL=redis://localhost:6379)
+#   docker compose up -d --wait       Redis and SonarQube; returns when both are healthy
+#   docker compose down               stop; add -v to drop the SonarQube volumes as well
+#
+# Both ports are bound to 127.0.0.1 only: nothing here is reachable from the network.
+
+name: rls-leak-tester
+
+services:
+  redis:
+    image: redis:7-alpine
+    # No persistence: no RDB snapshots, no append-only file. The data is rate-limit
+    # counters, caches and locks; every key has a TTL and may vanish at any time.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "127.0.0.1:6379:6379"
+    # The image declares VOLUME /data. A tmpfs keeps it from creating an anonymous volume.
+    tmpfs:
+      - /data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "6379", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 2s
+
+  sonarqube:
+    # Multi-arch image with a native arm64 variant. It needs roughly 2 to 3 GB of memory.
+    image: sonarqube:community
+    environment:
+      # The embedded Elasticsearch otherwise refuses to start on a default Docker VM
+      # (vm.max_map_count). Acceptable for a local, single-user server.
+      SONAR_ES_BOOTSTRAP_CHECKS_DISABLE: "true"
+    ports:
+      - "127.0.0.1:9000:9000"
+    volumes:
+      - sonarqube_data:/opt/sonarqube/data
+      - sonarqube_extensions:/opt/sonarqube/extensions
+      - sonarqube_logs:/opt/sonarqube/logs
+      # The image declares this VOLUME too. Named, so that no anonymous volume is left behind;
+      # not a tmpfs, because Docker mounts those noexec and Elasticsearch unpacks native code here.
+      - sonarqube_temp:/opt/sonarqube/temp
+    ulimits:
+      nofile:
+        soft: 131072
+        hard: 131072
+      nproc: 8192
+    healthcheck:
+      # curl ships in the image. The endpoint answers STARTING, DB_MIGRATION_NEEDED, ... and
+      # finally UP; only UP counts as healthy.
+      test:
+        - CMD-SHELL
+        - >-
+          curl -fsS http://localhost:9000/api/system/status | grep -Eq '"status" *: *"UP"'
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 180s
+
+volumes:
+  sonarqube_data:
+  sonarqube_extensions:
+  sonarqube_logs:
+  sonarqube_temp:
