@@ -339,3 +339,16 @@ Sonar: `QUALITY GATE STATUS: PASSED`; coverage 93.5, duplication 0.0, ratings A/
 `origin` = `https://github.com/MStanislavov/rls-leak-tester.git` exists because the owner asked for
 it before the build and had the initial `.gitignore` commit (`eed8508`) pushed. The build itself
 pushed nothing: `origin/main` is still `eed8508`, `main` is ahead by the build commits.
+
+### Phase 9 gate: clean clone, no environment variables (orchestrator, 2026-09-20)
+
+| Command (in a fresh `git clone` in a temp directory, `env -i`) | Result                                                                                                                                           |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `npm ci`                                                       | exit 0, 0 vulnerabilities                                                                                                                        |
+| `npm run build`                                                | compiled, every route dynamic                                                                                                                    |
+| `npm test`                                                     | 130 files passed, 2 skipped (the real-Redis suites, no `REDIS_URL`)                                                                              |
+| `npx next start` + `curl`                                      | `/`, `/lab`, `/docs` 200; strict CSP and security headers; `/api/health` booleans only (all features false); `/api/explain` 503 `not_configured` |
+
+Not verifiable from this machine (account-bound, left to the owner per `docs/DEPLOY.md`): the CI
+workflow on GitHub's runners, a live Anthropic stream, a real Supabase project and GitHub sign-in,
+a managed `rediss://` Redis, Vercel deployment and DNS.
