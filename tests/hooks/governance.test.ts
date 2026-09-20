@@ -1,8 +1,9 @@
 /**
  * The governance files agree with each other (rules.yaml DOD-10): .claude/settings.json is wired to
  * scripts that exist and denies what GIT-002 and SEC-003 say it denies, every rule id quoted in
- * CLAUDE.md, the reviewer agent and the hook scripts exists in rules.yaml, and every npm script
- * CLAUDE.md names exists in package.json.
+ * CLAUDE.md, the skills, the reviewer agent and the hook scripts exists in rules.yaml, every npm
+ * script CLAUDE.md or a skill names exists in package.json, and the six skills of brief 6.4 exist
+ * in the form the brief asks for.
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -31,6 +32,23 @@ interface RulesFile {
   definition_of_done: { id: string }[];
 }
 const rulesFile = parse(read("rules.yaml")) as RulesFile;
+const npmScripts = (JSON.parse(read("package.json")) as { scripts: Record<string, string> })
+  .scripts;
+const namedNpmScripts = (text: string) => [
+  ...new Set([...text.matchAll(/npm run ([\w:-]+)/g)].map((match) => match[1] ?? "")),
+];
+
+/** Brief 6.4: one folder per skill, each with a SKILL.md. */
+const SKILLS = [
+  "quality-gate",
+  "add-template",
+  "add-static-check",
+  "debug-probe",
+  "sonar-triage",
+  "release",
+] as const;
+const skillPath = (name: string) => `.claude/skills/${name}/SKILL.md`;
+
 const knownIds = new Set(
   [
     rulesFile.principles,
@@ -281,6 +299,7 @@ describe("rule ids and commands quoted outside rules.yaml", () => {
   );
   const files = [
     "CLAUDE.md",
+    ...SKILLS.map(skillPath),
     ".claude/agents/security-reviewer.md",
     ".claude/settings.json",
     ".husky/pre-commit",
@@ -300,11 +319,9 @@ describe("rule ids and commands quoted outside rules.yaml", () => {
     ).toBeGreaterThan(10);
   });
 
-  it("every npm script CLAUDE.md names exists, except the one it announces for Phase 8", () => {
+  it("every npm script CLAUDE.md names exists, the gate and the Sonar commands included", () => {
     const claudeMd = read("CLAUDE.md");
-    const scripts = (JSON.parse(read("package.json")) as { scripts: Record<string, string> })
-      .scripts;
-    const named = [...new Set([...claudeMd.matchAll(/npm run ([\w:-]+)/g)].map((m) => m[1] ?? ""))];
+    const named = namedNpmScripts(claudeMd);
     expect(named).toEqual(
       expect.arrayContaining([
         "dev",
@@ -314,13 +331,14 @@ describe("rule ids and commands quoted outside rules.yaml", () => {
         "test:coverage",
         "e2e",
         "e2e:dev",
+        "quality",
+        "sonar",
+        "sonar:bootstrap",
       ]),
     );
-    const missing = named.filter((name) => !(name in scripts));
-    if (missing.length > 0) {
-      expect(missing).toEqual(["quality"]);
-      expect(claudeMd).toMatch(/`npm run quality`[^\n]*Arrives in Phase 8/);
-    }
+    expect(named.filter((name) => !(name in npmScripts))).toEqual([]);
+    // Nothing is announced for a later phase any more: what CLAUDE.md names is there.
+    expect(claudeMd).not.toMatch(/Arrives in Phase|written in Phase|From Phase \d+ on/);
   });
 
   it("CLAUDE.md and the reviewer agent describe the rules as rules.yaml has them", () => {
@@ -362,5 +380,88 @@ describe(".claude/agents/security-reviewer.md", () => {
     expect(meta.name).toBe("security-reviewer");
     expect(meta.description.length).toBeGreaterThan(40);
     expect(meta.tools.split(",").map((tool) => tool.trim())).toEqual(["Read", "Grep", "Glob"]);
+  });
+});
+
+describe(".claude/skills", () => {
+  const FRONTMATTER = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/;
+  const split = (name: string) => {
+    const match = FRONTMATTER.exec(read(skillPath(name)));
+    return { frontmatter: match?.[1] ?? "", body: match?.[2] ?? "" };
+  };
+  const prefixes = [...new Set(rulesFile.rules.map((rule) => rule.id.split("-")[0] ?? ""))];
+  const ruleId = new RegExp(String.raw`\b(?:${prefixes.join("|")})-\d{3}\b`);
+
+  it("holds exactly the six skills of the brief, one folder each with a SKILL.md", () => {
+    const folders = readdirSync(path.join(REPO_ROOT, ".claude/skills"), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+    expect(folders.sort()).toEqual([...SKILLS].sort());
+    for (const name of SKILLS) {
+      expect(existsSync(path.join(REPO_ROOT, skillPath(name))), name).toBe(true);
+    }
+  });
+
+  it.each(SKILLS)(
+    "%s: the frontmatter is YAML with a name and a trigger-only description",
+    (name) => {
+      const { frontmatter } = split(name);
+      expect(frontmatter.length).toBeGreaterThan(0);
+      expect(frontmatter.length).toBeLessThanOrEqual(1024);
+      const meta = parse(frontmatter) as Record<string, unknown>;
+      expect(Object.keys(meta).sort()).toEqual(["description", "name"]);
+      expect(meta.name).toBe(name);
+      const description = String(meta.description);
+      expect(description).toMatch(/^Use when /);
+      expect(description.length).toBeGreaterThan(60);
+      expect(description.length).toBeLessThanOrEqual(500);
+      // Triggers only. A description that carries the workflow gets followed instead of the body:
+      // no command, no code, no sequence of steps.
+      expect(description).not.toMatch(/`|npm |npx |\bthen\b|\bfirst\b|\bstep\b|->|\d\.\s/i);
+    },
+  );
+
+  it.each(SKILLS)("%s: the body is short, names real commands and cites rules.yaml", (name) => {
+    const { body } = split(name);
+    expect(body).toMatch(new RegExp(String.raw`^\n?# `));
+    // "Under about 300 words" (brief 6.4). A word has a letter or a digit in it: the pipes and
+    // rules of a Markdown table and a lone brace of a code block are not words.
+    const words = body.split(/\s+/).filter((token) => /[A-Za-z0-9]/.test(token));
+    expect(words.length).toBeLessThanOrEqual(300);
+    expect(body).toMatch(ruleId);
+    expect(namedNpmScripts(body).filter((script) => !(script in npmScripts))).toEqual([]);
+    expect(body).toMatch(/```sh\n/);
+  });
+
+  it.each(SKILLS)("%s: every repository path it names exists", (name) => {
+    const { body } = split(name);
+    const named = [
+      ...new Set(
+        [
+          ...body.matchAll(
+            /(?<![\w/.$-])((?:src|tests|e2e|scripts|docs|supabase|\.claude)\/[\w./-]*\w)/g,
+          ),
+        ].map((match) => match[1] ?? ""),
+      ),
+    ];
+    expect(named.length, name).toBeGreaterThan(0);
+    expect(named.filter((file) => !existsSync(path.join(REPO_ROOT, file)))).toEqual([]);
+  });
+
+  it("the skills never carry what they forbid", () => {
+    for (const name of SKILLS) {
+      const { body } = split(name);
+      // FA-1, FA-2: a skill prepares a release or a deployment, it never performs one.
+      expect(body, name).not.toMatch(/^\s*(git push|vercel|npx vercel|supabase (db push|link))\b/m);
+      // QUAL-002: no way around the hooks or the gate is ever a step.
+      expect(body, name).not.toMatch(/^\s*git commit[^\n]*(--no-verify| -n\b)/m);
+    }
+  });
+
+  it("CLAUDE.md lists every skill with when to use it", () => {
+    const claudeMd = read("CLAUDE.md");
+    for (const name of SKILLS) {
+      expect(claudeMd, name).toMatch(new RegExp(String.raw`^- \`${name}\`: \S`, "m"));
+    }
   });
 });

@@ -22,28 +22,44 @@ build is in `docs/PROGRESS.md`. Read both before a larger change.
 
 ## Commands
 
-| Command                         | What it does                                                                               |
-| ------------------------------- | ------------------------------------------------------------------------------------------ |
-| `npm run dev`                   | Dev server (Turbopack). Works with zero environment variables (P4)                         |
-| `npm run lint`                  | ESLint, flat config, `--max-warnings 0`; boundary messages carry their rule id             |
-| `npm run typecheck`             | `next typegen && tsc --noEmit`. Never plain `tsc`: the route types come first              |
-| `npm run rules`                 | `scripts/rules-check.mjs`, full mode: validates rules.yaml and runs its checks             |
-| `npm run rules:fast -- <files>` | The same checks for a few files (what the hooks and lint-staged run)                       |
-| `npm test`                      | Vitest, unit and integration (`src/**/*.test.ts(x)`, `tests/**/*.test.ts`)                 |
-| `npm run test:coverage`         | The same with the 80 percent line and branch thresholds on `src/lib/**`                    |
-| `npm run e2e`                   | Production build, then Playwright with the strict CSP                                      |
-| `npm run e2e:dev`               | Playwright against `next dev`                                                              |
-| `npm run format`                | Prettier over the repository; `format:check` only checks                                   |
-| `npm run quality`               | The full local gate including SonarQube. Arrives in Phase 8; until then run the list below |
-| `docker compose up -d redis`    | Local Redis for the contract suite; `sonarqube` is the second service                      |
+| Command                                         | What it does                                                                               |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `npm run dev`                                   | Dev server (Turbopack). Works with zero environment variables (P4)                         |
+| `npm run lint`                                  | ESLint, flat config, `--max-warnings 0`; boundary messages carry their rule id             |
+| `npm run typecheck`                             | `next typegen && tsc --noEmit`. Never plain `tsc`: the route types come first              |
+| `npm run rules`                                 | `scripts/rules-check.mjs`, full mode: validates rules.yaml and runs its checks             |
+| `npm run rules:fast -- <files>`                 | The same checks for a few files (what the hooks and lint-staged run)                       |
+| `npm test`                                      | Vitest, unit and integration (`src/**/*.test.ts(x)`, `tests/**/*.test.ts`)                 |
+| `npm run test:coverage`                         | The same with coverage: 80 percent lines and branches, overall and on `src/lib/**`         |
+| `npm run e2e`                                   | Production build, then Playwright with the strict CSP                                      |
+| `npm run e2e:dev`                               | Playwright against `next dev`                                                              |
+| `npm run format`                                | Prettier over the repository; `format:check` only checks                                   |
+| `npm run quality`                               | The full local gate, SonarQube included; stops at the first red stage                      |
+| `npm run sonar:bootstrap`                       | Idempotent server setup: project, token, gate "RLS Leak Tester". Writes `.env.sonar`       |
+| `npm run sonar`                                 | Scan and wait for the gate; needs `coverage/lcov.info` from `npm run test:coverage`        |
+| `scripts/sonar/api.sh '<api path>'`             | Read-only GET against the local server, prints JSON: gate status, issues, hotspots         |
+| `docker compose up -d --wait redis sonarqube`   | Local Redis (contract suite) and SonarQube (127.0.0.1:9000, 2 to 4 minutes on first start) |
+| `sh scripts/verify-export-postgres.sh`          | The exported CI checks of every template against a real Postgres in Docker                 |
+| `sh scripts/self-isolation/verify-postgres.sh`  | The app's own migrations proven ISOLATED on a real Postgres in Docker                      |
+| `node scripts/self-isolation/sync-template.mjs` | Regenerates the fourth template's SQL module after a change of `supabase/migrations`       |
 
 ## Running the gate
 
-In this order, each one green before the next: `npm run format:check`, `npm run lint`,
-`npm run typecheck`, `npm run rules`, `npm run test:coverage`, `npm run e2e`. From Phase 8 on
-`npm run quality` runs all of it plus the Sonar scan and the quality gate "RLS Leak Tester". Say
-that something passed only if you just ran it and read the output (P2, FA-7). A red gate is fixed
-in the code, never by loosening a test, a lint rule, a threshold or an exclusion (QUAL-002, FA-6).
+`npm run quality` is the gate (skill `quality-gate`): Sonar preflight, format, lint, typecheck,
+rules, tests with coverage (on a real Redis when Docker is there), production build, Playwright
+against the build, Sonar scan with the quality gate "RLS Leak Tester". It stops at the first red
+stage and prints that stage and the command that runs it alone. It needs the local server:
+`docker compose up -d --wait redis sonarqube`, once `npm run sonar:bootstrap`
+(`scripts/sonar/README.md`). `npm run quality -- --no-sonar` is for a machine without Docker and
+says itself that the gate was NOT fully run: never report it as a pass.
+
+The gate's conditions are derived from `rules.yaml` (`thresholds.quality_gate`, `coverage`,
+`duplication`) on overall and on new code: coverage at least 80 percent, duplication at most 3
+percent, reliability, security and maintainability rating A, hotspots reviewed 100 percent, no
+blocker and no critical issue (the server's MQR mode calls critical "high"). Say that something
+passed only if you just ran it and read the output (P2, FA-7). A red gate is fixed in the code,
+never by loosening a test, a lint rule, a threshold or an exclusion, and never by resolving Sonar
+findings in bulk (QUAL-002, FA-6; policy in `docs/sonar-triage.md`).
 
 ## Architecture map
 
@@ -58,13 +74,16 @@ src/lib/engine/       SqlEngine port, PGlite adapter, worker client, Supabase sh
 src/lib/redis/        ports with two adapters each (Redis, in-memory): limiter, cache, lock
 src/lib/ai/           model config, prompt, schema, route logic
 src/lib/store/        ScenarioStore port: localStorage and Supabase adapters
-src/lib/security/     CSP and header builders (pure)
+src/lib/lab/          view models and state of the lab: run, explain, verify-fix, export, share
+src/lib/site/         navigation, docs sections and template cards of the static pages
+src/lib/security/     CSP and header builders, clientAddress (pure)
 src/lib/config/       the only reader of process.env: env.ts, server.ts, public.ts, runtime.ts
 src/proxy.ts          per-request nonce CSP (the Next.js 16 name for middleware)
 supabase/migrations/  SQL-first schema and policies of the optional store
 tests/                fixtures and integration suites; unit tests sit beside the code
+tests/golden/         every template through the real runner; result JSON as file snapshots
 e2e/                  Playwright
-scripts/              rules check, hooks, spikes, sonar bootstrap
+scripts/              rules check, hooks, quality.mjs, sonar/, self-isolation/, export verifier
 ```
 
 Boundaries, enforced by ESLint and the rules check, not by intention:
@@ -129,7 +148,7 @@ Boundaries, enforced by ESLint and the rules check, not by intention:
   same change. An inline suppression needs its reason in the same comment (`-- why`);
   `@ts-ignore` and `@ts-nocheck` are forbidden.
 
-## Traps (each one cost time once; details in docs/adr/0002 and 0003)
+## Traps (each one cost time once; details in the ADR named)
 
 1. **Three ways RLS silently does not apply**: a superuser, a table owner without
    `FORCE ROW LEVEL SECURITY`, a role with `BYPASSRLS` (Supabase's `service_role`). PGlite's
@@ -169,6 +188,33 @@ Boundaries, enforced by ESLint and the rules check, not by intention:
     `it.each` titles with `%j` throw on a `bigint`.
 11. **No `server-only` package**: `src/lib/config/server.ts` throws when a `window` exists. Test
     fixtures that look like credentials are assembled at run time so SEC-003 does not trip.
+12. **Timeouts in `vitest.config.mts` are watchdogs, not product thresholds.** Suites that boot a
+    real PGlite exceed Vitest's defaults when every worker loads WASM at once, hence
+    `testTimeout` 30 s and `hookTimeout` 60 s; a suite that runs a whole matrix passes its own
+    120 s. Do not lower them and do not "fix" a slow suite by raising them further: the probe
+    timeout and the run ceiling are tested with injected timers.
+13. **The export shares the runner's probe builders** (ADR 0019). `src/lib/export` writes no probe
+    statement of its own, so a change to a builder, the plan contexts or the setup order in
+    `src/lib/runner` changes every exported test file (`tests/export/runner-contract.test.ts` pins
+    that contract). The other half is a mirror: `src/lib/export/runtime.ts` repeats
+    `executor.ts`, `cells.ts` and `classify.ts` in PL/pgSQL, so a change of how a cell is measured
+    or classified is made in both. Then run `sh scripts/verify-export-postgres.sh`: real Postgres
+    must report the cells the runner reports on PGlite.
+14. **"Verified fix" is an allow-list, then a re-run** (ADR 0024). `applyProposedFix` in
+    `src/lib/lab/verify-fix.ts` refuses, without a run, every proposal with a statement other than
+    `CREATE | DROP | ALTER POLICY`, `GRANT`, `REVOKE` and
+    `ALTER TABLE ... ENABLE | FORCE ROW LEVEL SECURITY`: a trigger or a changed seed can make the
+    cells pass while the leak stays. The prompt in `src/lib/ai/prompt.ts` names the same list;
+    change both together, never widen one alone (AI-002, FA-5).
+15. **The rate-limit identity is the LAST hop of `X-Forwarded-For`** (ADR 0024):
+    `clientAddress(headers)` in `src/lib/security/client-address.ts`, the only reader. The first
+    hop is text the caller sends. The assumption is exactly one trusted proxy in front of the app;
+    no fallback to an earlier hop, no second helper.
+16. **Golden snapshots are evidence** (ADR 0015). `tests/golden/__snapshots__/` stays
+    byte-identical unless behaviour was genuinely wrong or a PGlite upgrade reworded a message:
+    read the diff, explain it in an ADR, then `npx vitest run tests/golden -u`. A cell that
+    disagrees is reproduced by hand first (skill `debug-probe`); never edit a declaration, an
+    expectation or a snapshot to get green (QUAL-002).
 
 ## Guard rails in this checkout
 
@@ -191,18 +237,20 @@ Boundaries, enforced by ESLint and the rules check, not by intention:
 
 ## Skills and the reviewer agent
 
-Skills live in `.claude/skills/<name>/SKILL.md` (written in Phase 9):
+Skills live in `.claude/skills/<name>/SKILL.md`. Load the one that fits before you start:
 
-- `quality-gate`: before calling work done, or when any stage of the gate is red.
-- `add-template`: when adding a scenario template (leaky and fixed variant, expectations, golden
-  tests, docs entry).
-- `add-static-check`: when adding an `RLSxxx` static check (semantics from the official docs
-  first, a positive and a negative fixture, docs entry).
-- `debug-probe`: when one matrix cell disagrees with the expectation and you must decide whether
-  the policy, the expectation or the runner is wrong.
-- `sonar-triage`: when the SonarQube gate fails or issues and hotspots need a decision.
-- `release`: when cutting a version (changelog, full gate, tag, the owner's deployment checklist).
-  It never deploys.
+- `quality-gate`: before calling work done, committing a phase or releasing, and when any stage of
+  `npm run quality` is red.
+- `add-template`: when adding or changing a built-in scenario template (leaky and fixed variant,
+  declared failures, golden snapshots, the template loop of the lab e2e suite, docs entry).
+- `add-static-check`: when adding an `RLSxxx` static check or changing what one flags (semantics
+  from the official docs first, a positive and a negative fixture, catalogue entry).
+- `debug-probe`: when one matrix cell disagrees with the expectation, or a golden, template, runner
+  or export test is red, and before anyone touches an expectation or a snapshot.
+- `sonar-triage`: when the SonarQube gate is red or issues and hotspots need a decision; a claimed
+  false positive is documented in `docs/sonar-triage.md`, nothing is resolved in bulk.
+- `release`: when cutting a version (version, changelog, full gate, local tag, then the owner's
+  checklist in `docs/DEPLOY.md`). It never deploys and never pushes.
 
 Agent `security-reviewer` (`.claude/agents/security-reviewer.md`, read-only tools): run it on any
 change that touches `src/lib/ai`, `src/app/api`, `src/proxy.ts`, headers or the CSP, the SQL
