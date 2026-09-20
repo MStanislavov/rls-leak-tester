@@ -1,5 +1,5 @@
 /**
- * Builders shared by the three templates. They exist so that a template file reads as a table of
+ * Builders shared by the templates. They exist so that a template file reads as a table of
  * decisions (who may do what) and cannot forget a cell: `buildExpectations` refuses a table that
  * does not name every persona, so no template ever relies on the default scopes.
  */
@@ -11,6 +11,7 @@ import {
   type Persona,
   type Scenario,
   type Scope,
+  type SupabaseGrants,
   type TableConfig,
 } from "../types";
 import type {
@@ -94,6 +95,11 @@ export interface TemplateParts {
   readonly fix: string;
   readonly schemaSql: Readonly<Record<TemplateVariantKind, string>>;
   readonly seedSql: string;
+  /**
+   * The Supabase grants regime both variants run under. Default `legacy`: RLS is the only
+   * barrier. `explicit` is for a schema that writes its own grants.
+   */
+  readonly supabaseGrants?: SupabaseGrants;
   readonly personas: readonly Persona[];
   readonly tables: readonly TableConfig[];
   readonly expectations: readonly Expectation[];
@@ -116,7 +122,7 @@ function scenarioOf(parts: TemplateParts, kind: TemplateVariantKind): Scenario {
     personas: structuredClone([...parts.personas]),
     tables: structuredClone([...parts.tables]),
     expectations: structuredClone([...parts.expectations]),
-    options: { exposedSchemas: ["public"], supabaseGrants: "legacy" },
+    options: { exposedSchemas: ["public"], supabaseGrants: parts.supabaseGrants ?? "legacy" },
   };
 }
 

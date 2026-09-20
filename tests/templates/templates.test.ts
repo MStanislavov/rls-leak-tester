@@ -23,6 +23,17 @@ import {
 } from "@/lib/scenario/templates";
 import { buildExpectations, everyOperation, readOnly } from "@/lib/scenario/templates/build";
 
+/**
+ * The grants regime of every template, pinned. The three demos run under the legacy blanket
+ * grants, so RLS is their only barrier; the app's own migration writes its grants itself.
+ */
+const GRANTS_REGIMES: Readonly<Record<string, string>> = {
+  "multi-tenant-saas": "legacy",
+  "team-workspace": "legacy",
+  "todos-sharing": "legacy",
+  "own-scenarios-table": "explicit",
+};
+
 const VARIANTS = templateVariants().map(({ template, variant }) => ({
   id: variant.scenario.id,
   template,
@@ -30,11 +41,12 @@ const VARIANTS = templateVariants().map(({ template, variant }) => ({
 }));
 
 describe("TEMPLATES", () => {
-  it("lists the three templates in the order of the brief", () => {
+  it("lists the four templates in the order of the brief", () => {
     expect(TEMPLATES.map((template) => template.id)).toEqual([
       "multi-tenant-saas",
       "team-workspace",
       "todos-sharing",
+      "own-scenarios-table",
     ]);
   });
 
@@ -95,12 +107,16 @@ describe.each(VARIANTS)("scenario $id", ({ template, variant }) => {
     expect(scenario.description.length).toBeLessThanOrEqual(MAX_DESCRIPTION_LENGTH);
   });
 
-  it("is a supabase scenario under the legacy grants, named after its template", () => {
+  it("is a supabase scenario under its pinned grants regime, named after its template", () => {
     expect(scenario.id).toBe(`${template.id}-${variant.kind}`);
     expect(scenario.title).toBe(`${template.title} (${variant.kind})`);
     expect(scenario.description.startsWith(template.description)).toBe(true);
     expect(scenario.mode).toBe("supabase");
-    expect(scenario.options).toEqual({ exposedSchemas: ["public"], supabaseGrants: "legacy" });
+    expect(GRANTS_REGIMES[template.id]).toBeDefined();
+    expect(scenario.options).toEqual({
+      exposedSchemas: ["public"],
+      supabaseGrants: GRANTS_REGIMES[template.id],
+    });
   });
 
   it("has anon, at least two signed-in users with distinct uuid subs, and service_role", () => {
@@ -153,7 +169,7 @@ describe.each(VARIANTS)("scenario $id", ({ template, variant }) => {
     }
   });
 
-  it("never declares a service_role cell as a failure: BYPASSRLS reaches everything by design", () => {
+  it("never declares a service_role cell as a failure: BYPASSRLS proves nothing about policies", () => {
     const service = scenario.personas.at(-1)?.id;
     expect(variant.expectedFailures.some((cell) => cell.personaId === service)).toBe(false);
   });
@@ -169,6 +185,7 @@ describe("expected static checks of the leaky variants", () => {
       ["RLS003 projects_update", "RLS004 projects_update"],
       [],
       ["RLS003 todos_select_public"],
+      [],
     ]);
   });
 });

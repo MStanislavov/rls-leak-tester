@@ -3,6 +3,7 @@
  * does not re-export them, so a page that only needs the types does not load the SQL.
  */
 import { MULTI_TENANT_SAAS } from "./multi-tenant-saas";
+import { OWN_SCENARIOS_TABLE } from "./own-scenarios-table";
 import { TEAM_WORKSPACE } from "./team-workspace";
 import { TODOS_SHARING } from "./todos-sharing";
 import { TEMPLATE_VARIANT_KINDS, type Template, type TemplateVariant } from "./types";
@@ -19,11 +20,17 @@ export type {
 } from "./types";
 
 export { MULTI_TENANT_SAAS } from "./multi-tenant-saas";
+export { OWN_SCENARIOS_TABLE } from "./own-scenarios-table";
 export { TEAM_WORKSPACE } from "./team-workspace";
 export { TODOS_SHARING } from "./todos-sharing";
 
 /** Stable order: the order of the brief, and the order every list and test shows them in. */
-export const TEMPLATES: readonly Template[] = [MULTI_TENANT_SAAS, TEAM_WORKSPACE, TODOS_SHARING];
+export const TEMPLATES: readonly Template[] = [
+  MULTI_TENANT_SAAS,
+  TEAM_WORKSPACE,
+  TODOS_SHARING,
+  OWN_SCENARIOS_TABLE,
+];
 
 export function findTemplate(id: string): Template | undefined {
   return TEMPLATES.find((template) => template.id === id);

@@ -124,6 +124,13 @@ const thresholdsSchema = z.strictObject({
     explain: rateLimit,
     scenario_writes: rateLimit,
   }),
+  store: z.strictObject({
+    scenario_body_max_bytes: z.number().int().positive().max(1048576),
+    scenario_payload_db_max_bytes: z.number().int().positive().max(1572864),
+    list_max_rows: z.number().int().positive().max(200),
+    slug_suffix_length: z.number().int().min(16).max(32),
+    slug_max_attempts: z.number().int().positive().max(5),
+  }),
 });
 
 const exclusionSchema = z.strictObject({

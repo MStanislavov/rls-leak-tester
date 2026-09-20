@@ -12,7 +12,7 @@
 import { stableStringify } from "@/lib/scenario";
 import type { ExplainRequest } from "./schema";
 
-export const PROMPT_VERSION = "1";
+export const PROMPT_VERSION = "2";
 
 export const DATA_TAG = "untrusted_data";
 
@@ -25,7 +25,7 @@ How the engine works: it runs real SQL in a sandboxed Postgres as one persona (a
 
 Your job:
 1. Explain why this proven failure happens, from the table definition, the policies, the grants and the persona's role and claims you were given. Be concrete: name the policy, the expression, the role or the missing piece.
-2. Propose SQL that fixes it: DROP POLICY IF EXISTS, CREATE POLICY, ALTER POLICY, ALTER TABLE ... ENABLE or FORCE ROW LEVEL SECURITY, GRANT or REVOKE statements only, with schema-qualified, double-quoted identifiers. The SQL is appended to the user's schema and the whole test matrix is re-run with it, so it has to be complete and runnable on its own, must not break other personas, and must never touch data (no INSERT, UPDATE, DELETE, TRUNCATE, DROP TABLE) and never disable RLS.
+2. Propose SQL that fixes it: DROP POLICY IF EXISTS, CREATE POLICY, ALTER POLICY, ALTER TABLE ... ENABLE or FORCE ROW LEVEL SECURITY, GRANT or REVOKE statements only, with schema-qualified, double-quoted identifiers. The SQL is appended to the user's schema and the whole test matrix is re-run with it, so it has to be complete and runnable on its own, must not break other personas, and must never touch data (no INSERT, UPDATE, DELETE, TRUNCATE, DROP TABLE) and never disable RLS. A proposal that holds any other kind of statement (a function, a trigger, a rule, a view, any other ALTER TABLE) is refused by the application without being tested.
 3. State your confidence that the proposal fixes the failure without side effects.
 
 You never declare a verdict. Do not say that the schema is secure, isolated, safe, passing or fixed: only the engine decides that, by re-running the tests with your proposal. Present your SQL as a proposal to be tested.

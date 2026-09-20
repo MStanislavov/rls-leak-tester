@@ -160,7 +160,7 @@ export const explanationModelSchema = z.object({
   proposedPolicySql: z
     .string()
     .describe(
-      "SQL that can be appended to the schema to fix the failure: DROP POLICY IF EXISTS / CREATE POLICY / ALTER TABLE / GRANT / REVOKE statements only, schema-qualified. An empty string when no SQL change can be proposed.",
+      "SQL that can be appended to the schema to fix the failure: DROP POLICY IF EXISTS / CREATE POLICY / ALTER POLICY / ALTER TABLE ... ENABLE or FORCE ROW LEVEL SECURITY / GRANT / REVOKE statements only, schema-qualified; any other statement is refused untested. An empty string when no SQL change can be proposed.",
     ),
   confidence: z
     .enum(CONFIDENCE_LEVELS)

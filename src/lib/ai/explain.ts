@@ -36,7 +36,7 @@ import {
   type WaitOptions,
 } from "@/lib/redis";
 import { stableStringify } from "@/lib/scenario";
-import { z } from "zod";
+import { clientAddress } from "@/lib/security/client-address";
 import { readExplainRequest } from "./body";
 import { MAX_OUTPUT_TOKENS, modelProviderOptions, resolveModelId } from "./model";
 import { EXPLAIN_SYSTEM_PROMPT, PROMPT_VERSION, buildExplainPrompt } from "./prompt";
@@ -106,9 +106,6 @@ export const EXPLAIN_CACHE_HEADER = "X-Explain-Cache";
 export const FOLLOWER_WAIT_TIMEOUT_MS = 15_000;
 export const FOLLOWER_WAIT_INTERVAL_MS = 250;
 
-const UNKNOWN_CLIENT = "unknown";
-const clientAddressSchema = z.string().regex(/^[0-9A-Fa-f:.]{2,45}$/);
-
 const defaultLogger: ExplainLogger = (event) => {
   console.info(JSON.stringify(event));
 };
@@ -143,17 +140,6 @@ export function hashExplainRequest(request: ExplainRequest, modelId: string): st
   return createHash("sha256")
     .update(stableStringify({ model: modelId, prompt: PROMPT_VERSION, request }))
     .digest("hex");
-}
-
-/**
- * The first hop of `X-Forwarded-For`, which the hosting platform overwrites, else `X-Real-IP`.
- * Anything that does not look like an address shares one bucket, which is the strict choice.
- */
-export function clientAddress(headers: Headers): string {
-  const forwarded = headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-  const candidate = forwarded ?? headers.get("x-real-ip")?.trim();
-  const parsed = clientAddressSchema.safeParse(candidate);
-  return parsed.success ? parsed.data : UNKNOWN_CLIENT;
 }
 
 function errorResponse(

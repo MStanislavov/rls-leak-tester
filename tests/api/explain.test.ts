@@ -8,7 +8,6 @@ import { describe, expect, it } from "vitest";
 import { readExplanationResponse } from "@/lib/ai/client";
 import {
   EXPLAIN_CACHE_HEADER,
-  clientAddress,
   explainAvailability,
   handleExplain,
   hashExplainRequest,
@@ -245,13 +244,29 @@ describe("rate limiting", () => {
     expect(refused.headers.get("ratelimit-limit")).toBe(String(limit));
   });
 
-  it("reads the first forwarded hop and puts anything else in one bucket", () => {
-    expect(clientAddress(new Headers({ "x-forwarded-for": "203.0.113.7, 10.0.0.1" }))).toBe(
-      "203.0.113.7",
-    );
-    expect(clientAddress(new Headers({ "x-real-ip": "2001:db8::1" }))).toBe("2001:db8::1");
-    expect(clientAddress(new Headers({ "x-forwarded-for": "<script>" }))).toBe("unknown");
-    expect(clientAddress(new Headers())).toBe("unknown");
+  it("keeps a caller in one bucket whatever it writes in front of the hop the proxy appended", async () => {
+    // An appending proxy forwards "what the caller sent, the caller's address". Anonymous
+    // callers have the address bucket only, so choosing it would switch the limit off.
+    const model = mockModel();
+    const { deps } = harness({ model });
+    const limit = RATE_LIMITS.explain.perIp;
+    const statuses: number[] = [];
+
+    for (let sent = 0; sent < limit + 3; sent += 1) {
+      const request = validRequest();
+      const response = await handleExplain(
+        post(
+          { ...request, cell: { ...request.cell, reason: `question ${sent}` } },
+          { headers: { "x-forwarded-for": `10.0.0.${sent}, 198.51.100.9` } },
+        ),
+        deps,
+      );
+      statuses.push(response.status);
+      await response.text();
+    }
+
+    expect(statuses).toEqual([...Array.from({ length: limit }, () => 200), 429, 429, 429]);
+    expect(model.doStreamCalls).toHaveLength(limit);
   });
 });
 

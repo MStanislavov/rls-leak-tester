@@ -375,6 +375,14 @@ thresholds:
       window_seconds: 60
       per_ip: 20
       per_user: 30
+  store:
+    # The optional Supabase store (docs/adr: store and sharing). src/lib/store/server/policy.ts
+    # and the check constraints of supabase/migrations must agree (tests/store/policy.test.ts).
+    scenario_body_max_bytes: 1048576
+    scenario_payload_db_max_bytes: 1572864
+    list_max_rows: 200
+    slug_suffix_length: 16
+    slug_max_attempts: 5
 
 exclusions:
   # --- ESLint: eslint.config.mjs ---------------------------------------------------------------

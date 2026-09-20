@@ -7,6 +7,7 @@ import { handleExplain } from "@/lib/ai/explain";
 import { createExplainModel } from "@/lib/ai/model";
 import { getServerConfig } from "@/lib/config/server";
 import { getRedisServices } from "@/lib/redis";
+import { resolveRequestUserId } from "@/lib/store/server/next";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,5 +24,7 @@ export async function POST(request: Request): Promise<Response> {
     limiter: services.rateLimiter,
     cache: services.cache,
     lock: services.lock,
+    // The per-user limit counts only a user Supabase Auth verified; never a body field.
+    resolveUserId: resolveRequestUserId,
   });
 }

@@ -11,15 +11,19 @@
  * from `next.config.ts`, which covers the paths this proxy skips.
  */
 import { NextResponse, type NextRequest } from "next/server";
+import { getPublicConfig } from "@/lib/config/public";
 import { isDevelopment } from "@/lib/config/runtime";
 import { buildDocumentCsp, CSP_HEADER, generateNonce } from "@/lib/security/csp";
+import { supabaseConnectSources } from "@/lib/store/connect-src";
 
 // Rule ARCH-002: only src/lib/config reads the environment. NODE_ENV is inlined at build time.
 const isDev = isDevelopment();
+// Only when Supabase is configured: the browser auth client refreshes its session there.
+const connectSrc = supabaseConnectSources(getPublicConfig().supabaseUrl);
 
 export function proxy(request: NextRequest): NextResponse {
   const nonce = generateNonce();
-  const policy = buildDocumentCsp({ nonce, isDev });
+  const policy = buildDocumentCsp({ nonce, isDev, connectSrc });
 
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set("x-nonce", nonce);

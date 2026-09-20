@@ -14,6 +14,7 @@ import type { SqlEngine } from "@/lib/runner/types";
 import { compareText, qualifiedName, splitSqlStatements, type Persona } from "@/lib/scenario";
 import {
   MULTI_TENANT_SAAS,
+  OWN_SCENARIOS_TABLE,
   TEAM_WORKSPACE,
   templateVariants,
   TODOS_SHARING,
@@ -30,6 +31,13 @@ import {
   FINANCE_TEAM_ID,
   PLATFORM_DOCUMENT_IDS,
 } from "@/lib/scenario/templates/team-workspace";
+import {
+  ALICE_SLUGS,
+  BOB_SLUGS,
+  PRIVATE_SCENARIO_IDS,
+  PUBLIC_SCENARIO_IDS,
+  UNLISTED_SCENARIO_IDS,
+} from "@/lib/scenario/templates/own-scenarios-table";
 import { PRIVATE_TODO_IDS, PUBLIC_TODO_IDS } from "@/lib/scenario/templates/todos-sharing";
 import {
   asPersona,
@@ -86,7 +94,7 @@ describe.each(templateVariants().map(({ variant }) => ({ id: variant.scenario.id
       expect(summary).toEqual({
         mode: "supabase",
         exposedSchemas: ["public"],
-        supabaseGrants: "legacy",
+        supabaseGrants: scenario.options?.supabaseGrants,
         schemaStatements: splitSqlStatements(scenario.schemaSql).length,
         seedStatements: splitSqlStatements(scenario.seedSql).length,
       });
@@ -157,7 +165,12 @@ describe.each(templateVariants().map(({ variant }) => ({ id: variant.scenario.id
         expect(catalog.policies.some((policy) => policy.table === table.name)).toBe(true);
       }
       expect(catalog.views).toEqual([]);
-      expect(catalog.functions.filter((fn) => fn.securityDefiner)).toEqual([]);
+      // The demos have no SECURITY DEFINER function; the app's own schema has exactly one.
+      expect(
+        catalog.functions.filter((fn) => fn.securityDefiner).map((fn) => `${fn.schema}.${fn.name}`),
+      ).toEqual(
+        scenario.id.startsWith(OWN_SCENARIOS_TABLE.id) ? ["public.get_scenario_by_slug"] : [],
+      );
       for (const check of variant.expectedStaticChecks) {
         expect(
           catalog.policies.some(
@@ -324,6 +337,76 @@ describe("todos-sharing: USING (true) on the public read policy opens every todo
         await writeAs(engine, bob, "update public.todos set user_id = $1::text::uuid", [
           String(personaOf(variant.scenario, "alice").claims.sub),
         ]),
+      ).toBe(BLOCKED);
+    }
+  });
+});
+
+describe("own-scenarios-table: a policy that mentions unlisted rows lets everybody list them", () => {
+  const read = "select id from public.scenarios";
+  const aliceOwn = [PUBLIC_SCENARIO_IDS[0], UNLISTED_SCENARIO_IDS[0], PRIVATE_SCENARIO_IDS[0]];
+
+  it("leaky: anon and Carol, who owns nothing, list both unlisted scenarios", async () => {
+    const { engine } = databaseOf(OWN_SCENARIOS_TABLE.leaky);
+    const { scenario } = OWN_SCENARIOS_TABLE.leaky;
+    const listed = sorted([...PUBLIC_SCENARIO_IDS, ...UNLISTED_SCENARIO_IDS]);
+    expect(await idsAs(engine, personaOf(scenario, "anon"), read)).toEqual(listed);
+    expect(await idsAs(engine, personaOf(scenario, "carol"), read)).toEqual(listed);
+    expect(await idsAs(engine, personaOf(scenario, "alice"), read)).toEqual(
+      sorted([...aliceOwn, PUBLIC_SCENARIO_IDS[1], UNLISTED_SCENARIO_IDS[1]]),
+    );
+  });
+
+  it("fixed: a query returns the public scenarios, plus the reader's own", async () => {
+    const { engine } = databaseOf(OWN_SCENARIOS_TABLE.fixed);
+    const { scenario } = OWN_SCENARIOS_TABLE.fixed;
+    expect(await idsAs(engine, personaOf(scenario, "anon"), read)).toEqual(
+      sorted(PUBLIC_SCENARIO_IDS),
+    );
+    expect(await idsAs(engine, personaOf(scenario, "carol"), read)).toEqual(
+      sorted(PUBLIC_SCENARIO_IDS),
+    );
+    expect(await idsAs(engine, personaOf(scenario, "alice"), read)).toEqual(
+      sorted([...aliceOwn, PUBLIC_SCENARIO_IDS[1]]),
+    );
+  });
+
+  it("fixed: a filter on the slug or the visibility does not get around the policy", async () => {
+    const { engine } = databaseOf(OWN_SCENARIOS_TABLE.fixed);
+    const anon = personaOf(OWN_SCENARIOS_TABLE.fixed.scenario, "anon");
+    expect(await idsAs(engine, anon, `${read} where slug = $1`, [BOB_SLUGS.unlisted])).toEqual([]);
+    expect(await idsAs(engine, anon, `${read} where visibility = 'unlisted'`)).toEqual([]);
+  });
+
+  it("both: service_role holds no privilege on the table, BYPASSRLS or not", async () => {
+    for (const variant of [OWN_SCENARIOS_TABLE.leaky, OWN_SCENARIOS_TABLE.fixed]) {
+      const { engine } = databaseOf(variant);
+      const service = personaOf(variant.scenario, "service");
+      expect(await idsAs(engine, service, read)).toBe(BLOCKED);
+      expect(await writeAs(engine, service, "delete from public.scenarios")).toBe(BLOCKED);
+    }
+  });
+
+  it("both: publishing is read-only, Bob cannot edit, delete or take over Alice's public scenario", async () => {
+    for (const variant of [OWN_SCENARIOS_TABLE.leaky, OWN_SCENARIOS_TABLE.fixed]) {
+      const { engine } = databaseOf(variant);
+      const bob = personaOf(variant.scenario, "bob");
+      expect(
+        await idsAs(
+          engine,
+          bob,
+          "update public.scenarios set title = 'x' where slug = $1 returning id",
+          [ALICE_SLUGS.public],
+        ),
+      ).toEqual([]);
+      expect(await writeAs(engine, bob, "delete from public.scenarios")).toBe(3);
+      expect(
+        await writeAs(engine, bob, "update public.scenarios set owner = $1::text::uuid", [
+          String(personaOf(variant.scenario, "alice").claims.sub),
+        ]),
+      ).toBe(BLOCKED);
+      expect(
+        await writeAs(engine, personaOf(variant.scenario, "anon"), "delete from public.scenarios"),
       ).toBe(BLOCKED);
     }
   });
