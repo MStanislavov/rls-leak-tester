@@ -38,11 +38,10 @@ export function ThemeToggle({ className }: { readonly className?: string }) {
   const active = hydrated ? theme : undefined;
 
   return (
-    <div
-      role="group"
+    <fieldset
       aria-label="Theme"
       data-testid="theme-toggle"
-      className={cn("inline-flex items-center gap-0.5 rounded-lg border p-0.5", className)}
+      className={cn("inline-flex min-w-0 items-center gap-0.5 rounded-lg border p-0.5", className)}
     >
       {OPTIONS.map(({ value, label, Icon }) => (
         <button
@@ -57,6 +56,6 @@ export function ThemeToggle({ className }: { readonly className?: string }) {
           <Icon aria-hidden="true" className="size-4" />
         </button>
       ))}
-    </div>
+    </fieldset>
   );
 }

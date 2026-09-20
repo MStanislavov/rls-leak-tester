@@ -88,14 +88,14 @@ export interface RunMatrixOptions {
   /** `SUPABASE_SETUP_SQL` from `@/lib/engine/supabase-setup-sql`; the runner cannot import it. */
   readonly supabase: SupabaseSetupSql;
   /** Cooperative cancellation, checked before every cell. */
-  readonly signal?: AbortSignal | undefined;
-  readonly onProgress?: ((progress: MatrixProgress) => void) | undefined;
+  readonly signal?: AbortSignal;
+  readonly onProgress?: (progress: MatrixProgress) => void;
   /** The clock for `timings`; defaults to `Date.now`. Never reaches `result`. */
-  readonly now?: (() => number) | undefined;
+  readonly now?: () => number;
   /** Test seam for the bypass guards (RUN-001). Production code leaves it out. */
-  readonly executor?: ProbeExecutor | undefined;
+  readonly executor?: ProbeExecutor;
   /** SQL errors one database session may raise; defaults to `DEFAULT_ERROR_BUDGET`. */
-  readonly errorBudget?: ErrorBudget | undefined;
+  readonly errorBudget?: ErrorBudget;
 }
 
 export interface MatrixTimings {
@@ -321,11 +321,15 @@ async function expectedKeys(
   if (expectation.scope !== "custom") {
     return expectedKeysForScope(expectation.scope, truth, facts, membership);
   }
+  const expectedRowsSql = expectation.expectedRowsSql ?? "";
+  // What is named when this fails: the query that ran, or the user's text when none was built.
+  let statement = expectedRowsSql;
   try {
-    const probe = expectedRowsProbe(truth, expectation.expectedRowsSql ?? "", {
+    const probe = expectedRowsProbe(truth, expectedRowsSql, {
       sub: facts.sub ?? null,
       claims: claimsJson,
     });
+    statement = probe.inlined;
     const { rows } = await readAsSuperuser(built.engine, probe);
     return {
       status: "ok",
@@ -335,7 +339,7 @@ async function expectedKeys(
     const failure = toProbeFailure(error);
     return {
       status: "failed",
-      failure: { ...failure, message: `expectedRowsSql failed: ${failure.message}` },
+      failure: { ...failure, message: `expectedRowsSql failed: ${failure.message}`, statement },
       databaseLost: isDatabaseLost(error),
     };
   }
@@ -513,7 +517,9 @@ export async function runMatrix(scenario: Scenario, options: RunMatrixOptions): 
     const expectations = resolveExpectations(scenario, built.tableConfigs);
     const cells: CellResult[] = [];
     const cellContexts: CellPlanContext[] = [];
-    const onPlanned = (context: CellPlanContext): void => void cellContexts.push(context);
+    const onPlanned = (context: CellPlanContext): void => {
+      cellContexts.push(context);
+    };
     const cellTimings: { id: string; ms: number }[] = [];
     let rebuilds = 0;
 

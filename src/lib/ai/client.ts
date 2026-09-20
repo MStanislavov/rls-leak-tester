@@ -51,11 +51,11 @@ export type ExplainClientResult =
 export type PartialListener = (partial: PartialExplanation) => void;
 
 export interface RequestExplanationOptions {
-  readonly signal?: AbortSignal | undefined;
-  readonly onPartial?: PartialListener | undefined;
+  readonly signal?: AbortSignal;
+  readonly onPartial?: PartialListener;
   /** Test seam; defaults to the global `fetch`. */
-  readonly fetch?: typeof fetch | undefined;
-  readonly endpoint?: string | undefined;
+  readonly fetch?: typeof fetch;
+  readonly endpoint?: string;
 }
 
 /** A field that is not there yet, or not valid yet, is simply absent from the partial. */

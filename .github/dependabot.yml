@@ -1,0 +1,42 @@
+# Dependabot for RLS Leak Tester (brief 5.3): npm and the pinned GitHub Actions, weekly.
+#
+# Minor and patch updates arrive as ONE pull request per ecosystem, so CI proves them together
+# (next with eslint-config-next, react with react-dom); a major update stays a pull request of
+# its own. The prefixes make Dependabot's subjects pass the commit-msg hook (conventional
+# commits): "build(deps): ...", "build(deps-dev): ...", "ci(deps): ...".
+# Dependabot runs get no repository secrets: the sonar job of ci.yml skips cleanly for them.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: build
+      include: scope
+    groups:
+      npm-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+
+  # Moves the commit SHA and the version comment of every `uses:` in .github/workflows.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: ci
+      include: scope
+    groups:
+      actions:
+        patterns:
+          - "*"

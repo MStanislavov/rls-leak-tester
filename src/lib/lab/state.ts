@@ -138,7 +138,7 @@ export type LabAction =
       readonly type: "expectation/set";
       readonly cell: CellRef;
       readonly choice: ScopeChoice;
-      readonly expectedRowsSql?: string | undefined;
+      readonly expectedRowsSql?: string;
     }
   | { readonly type: "run/start"; readonly purpose: RunPurpose }
   | { readonly type: "run/progress"; readonly done: number; readonly total: number }

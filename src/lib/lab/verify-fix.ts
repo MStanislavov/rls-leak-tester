@@ -306,7 +306,7 @@ export interface VerifyFixInput {
   readonly proposedPolicySql: string;
   /** A full matrix run on a fresh database that never rejects: the lab's `runIsolated`. */
   readonly run: (scenario: Scenario, options?: LabRunOptions) => Promise<LabRunOutcome>;
-  readonly options?: LabRunOptions | undefined;
+  readonly options?: LabRunOptions;
 }
 
 export interface VerifyFixResult {
@@ -342,9 +342,10 @@ export function cellChangeText(change: CellChange): string {
   if (change.after === null) {
     return `${before}, the cell no longer exists`;
   }
+  const rowWord = change.leakedAfter === 1 ? "row" : "rows";
   const rows =
     ISOLATION_FAILURES.has(change.after) && change.leakedAfter > 0
-      ? ` (${change.leakedAfter} ${change.leakedAfter === 1 ? "row" : "rows"} beyond the scope)`
+      ? ` (${change.leakedAfter} ${rowWord} beyond the scope)`
       : "";
   const verb = change.before === change.after ? "still" : "now";
   return `${before}, ${verb} ${change.after}${rows}`;

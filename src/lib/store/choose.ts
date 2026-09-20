@@ -11,10 +11,10 @@ import { createRemoteScenarioStore } from "./remote";
 import type { ScenarioStore } from "./types";
 
 export interface ScenarioStoreChoice {
-  config?: Pick<PublicConfig, "supabaseEnabled"> | undefined;
-  auth?: Pick<AuthClient, "getUser"> | undefined;
-  local?: (() => ScenarioStore) | undefined;
-  remote?: (() => ScenarioStore) | undefined;
+  config?: Pick<PublicConfig, "supabaseEnabled">;
+  auth?: Pick<AuthClient, "getUser">;
+  local?: () => ScenarioStore;
+  remote?: () => ScenarioStore;
 }
 
 /** Never throws: when the session cannot be read the answer is the local store. */

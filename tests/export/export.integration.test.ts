@@ -26,6 +26,7 @@ import {
   COLUMN_GRANTS,
   ESCAPES_AND_INSERTS,
   HOSTILE_TEXT,
+  HOSTILE_TEXT_LEAKY,
   NOTHING_TO_PROVE,
   REACH_SHAPES,
   SESSION_STATE,
@@ -33,6 +34,7 @@ import {
   writeOnlyGrant,
 } from "./fixtures";
 import {
+  cellIdsOf,
   dumpEverything,
   exportOf,
   failedCells,
@@ -74,10 +76,10 @@ function declared(variant: TemplateVariant): string[] {
     .sort(compareText);
 }
 
-function reported(outcome: TestFileOutcome): string[] {
+function reported(outcome: TestFileOutcome, exported: Pick<Exported, "matrix">): string[] {
   return outcome.passed
     ? []
-    : failedCells(outcome.error)
+    : failedCells(outcome.error, cellIdsOf(exported))
         .map((cell) => `${cell.status} ${cell.id}`)
         .sort(compareText);
 }
@@ -102,10 +104,10 @@ describe.each(TEMPLATES.map((template) => ({ id: template.id, template })))(
     it("the leaky variant fails, and the exception names exactly the declared cells", () => {
       expect(leaky.outcome.passed).toBe(false);
       expect(declared(template.leaky)).not.toEqual([]);
-      expect(reported(leaky.outcome)).toEqual(declared(template.leaky));
+      expect(reported(leaky.outcome, leaky)).toEqual(declared(template.leaky));
       if (!leaky.outcome.passed) {
         expect(leaky.outcome.error.code).toBe("P0001");
-        expect(leaky.outcome.error.message).toMatch(/^RLS Leak Tester: LEAKING or not proven\. /);
+        expect(leaky.outcome.error.message).toMatch(/^RLS Leak Tester: LEAKING\. /);
         for (const failure of template.leaky.expectedFailures) {
           const persona = template.leaky.scenario.personas.find(
             (candidate) => candidate.id === failure.personaId,
@@ -146,13 +148,14 @@ describe("determinism", () => {
   it(
     "the same file gives the same answer twice in one session",
     async () => {
-      const { ciExport } = await exportOf(MULTI_TENANT_SAAS.leaky.scenario);
+      const exported = await exportOf(MULTI_TENANT_SAAS.leaky.scenario);
+      const { ciExport } = exported;
       const engine = await prepareLikeWorkflow(ciExport);
       try {
         const first = await runTestFile(engine, fileOf(ciExport, TEST_SQL));
         const second = await runTestFile(engine, fileOf(ciExport, TEST_SQL));
         expect(first.passed).toBe(false);
-        expect(reported(second)).toEqual(reported(first));
+        expect(reported(second, exported)).toEqual(reported(first, exported));
       } finally {
         await engine.close();
       }
@@ -182,11 +185,12 @@ function keysOf(text: string | undefined): string[] {
   return (JSON.parse(text) as string[][]).map((key) => JSON.stringify(key));
 }
 
-function reportedCells(outcome: TestFileOutcome): ReportedCell[] {
+function reportedCells(executed: Executed): ReportedCell[] {
+  const { outcome } = executed;
   if (outcome.passed) {
     return [];
   }
-  return failedCells(outcome.error).map(({ id, status, line }) => {
+  return failedCells(outcome.error, cellIdsOf(executed)).map(({ id, status, line }) => {
     const match = KEYS_IN_LINE.exec(line);
     return { id, status, leakedKeys: keysOf(match?.[1]), missingKeys: keysOf(match?.[2]) };
   });
@@ -215,6 +219,7 @@ const FIXTURES = [
   { scenario: tenantScenario("leaky"), green: false },
   { scenario: tenantScenario("fixed"), green: true },
   { scenario: HOSTILE_TEXT, green: true },
+  { scenario: HOSTILE_TEXT_LEAKY, green: false },
   { scenario: SESSION_STATE, green: true },
   { scenario: COLUMN_GRANTS, green: false },
   { scenario: writeOnlyGrant(true), green: false },
@@ -232,7 +237,7 @@ describe.each(FIXTURES)("the exported check agrees with the matrix runner: $id",
     const fromRunner = runnerCells(executed);
     expect(fromRunner.length === 0).toBe(green);
     expect(executed.outcome.passed).toBe(green);
-    expect(reportedCells(executed.outcome)).toEqual(fromRunner);
+    expect(reportedCells(executed)).toEqual(fromRunner);
   });
 
   it("counts every probed cell, and turns every other cell into a comment with its reason", () => {
@@ -245,9 +250,24 @@ describe.each(FIXTURES)("the exported check agrees with the matrix runner: $id",
       expect(sql).toContain((cell.reason ?? "").slice(0, 40));
     }
     if (!executed.outcome.passed) {
-      const passed = matrix.result.cells.filter((cell) => cell.status === "pass").length;
-      expect(executed.outcome.error.message).toContain(
-        ` of ${ciExport.checkedCells} checked cells failed, ${passed} passed, 0 warnings.`,
+      // The counts are the runner's over the probed cells, status by status: a leak is never
+      // lumped with an overblock. (A cell whose expectedRowsSql failed is a comment, not a check.)
+      const failed = runnerCells(executed).map((cell) => cell.status);
+      const count = (...statuses: string[]): number =>
+        failed.filter((status) => statuses.includes(status)).length;
+      const counts = {
+        leak: count("leak"),
+        escape: count("escape"),
+        overblock: count("overblock"),
+        inconclusive: count("inconclusive"),
+        pass: matrix.result.counts.pass,
+      };
+      const [headline = ""] = executed.outcome.error.message.split("\n");
+      expect(headline).toContain(
+        `Of ${ciExport.checkedCells} checked cells: ${counts.leak + counts.escape} leaked or escaped, ${counts.overblock} overblocked, ${counts.inconclusive} inconclusive, ${counts.pass} passed; 0 warnings.`,
+      );
+      expect(headline.startsWith("RLS Leak Tester: LEAKING. ")).toBe(
+        counts.leak + counts.escape > 0,
       );
     }
   });
@@ -255,6 +275,28 @@ describe.each(FIXTURES)("the exported check agrees with the matrix runner: $id",
   it("leaves the database unchanged", () => {
     expect(executed.after).toBe(executed.before);
   });
+});
+
+describe("a quoted name with a space is really compared", () => {
+  it(
+    "the leaky hostile fixture reports its cells under their full ids",
+    async () => {
+      const executed = await execute(HOSTILE_TEXT_LEAKY);
+      const ids = reportedCells(executed).map((cell) => cell.id);
+
+      expect(ids.length).toBeGreaterThan(0);
+      for (const id of ids)
+        expect(id).toMatch(/^alice\|public\.Odd "Table\|(select|insert|update|delete)$/);
+      expect(reportedCells(executed)).toContainEqual(
+        expect.objectContaining({
+          id: 'alice|public.Odd "Table|select',
+          status: "leak",
+          leakedKeys: ['["2"]'],
+        }),
+      );
+    },
+    TIMEOUT_MS,
+  );
 });
 
 describe("the fixtures reach every branch of the runtime", () => {
@@ -345,14 +387,52 @@ describe("what decides the exit status", () => {
         tables: [],
       };
       const strict = await execute(scenario);
-      expect(reported(strict.outcome)).toEqual(["inconclusive alice|public.unique_slugs|insert"]);
+      expect(reported(strict.outcome, strict)).toEqual([
+        "inconclusive alice|public.unique_slugs|insert",
+      ]);
       if (!strict.outcome.passed) {
         expect(strict.outcome.error.message).toContain("[23505]");
+        // Nothing leaked: the headline must not say so.
+        expect(strict.outcome.error.message.split("\n")[0]).toBe(
+          "RLS Leak Tester: NOT PROVEN, no leak or escape was measured. Of 4 checked cells: 0 leaked or escaped, 0 overblocked, 1 inconclusive, 3 passed; 0 warnings.",
+        );
       }
       const lenient = await execute(scenario, "warn");
       expect(lenient.outcome).toEqual({ passed: true });
       expect(fileOf(lenient.ciExport, TEST_SQL)).toContain("is a warning.");
       expect(lenient.after).toBe(lenient.before);
+    },
+    TIMEOUT_MS,
+  );
+
+  it(
+    "overblock alone fails the run, and is not called a leak",
+    async () => {
+      const scenario: Scenario = {
+        ...ESCAPES_AND_INSERTS,
+        id: "export-overblock-only",
+        expectations: [],
+        schemaSql: `
+          create role app_user nologin;
+          create table locked (id int primary key, user_id uuid not null, body text);
+          alter table locked enable row level security;
+          create policy nobody on locked for select using (false);
+          grant select on locked to app_user;
+          insert into locked values (1, '11111111-1111-4111-8111-111111111111', 'hello');`,
+        tables: [],
+      };
+      const executed = await execute(scenario);
+      const { counts } = executed.matrix.result;
+      expect(counts).toMatchObject({ leak: 0, escape: 0, inconclusive: 0 });
+      expect(counts.overblock).toBeGreaterThan(0);
+      expect(executed.outcome.passed).toBe(false);
+      if (!executed.outcome.passed) {
+        const [headline = ""] = executed.outcome.error.message.split("\n");
+        expect(headline).toBe(
+          `RLS Leak Tester: OVERBLOCKING, no leak or escape was measured. Of ${executed.ciExport.checkedCells} checked cells: 0 leaked or escaped, ${counts.overblock} overblocked, 0 inconclusive, ${counts.pass} passed; 0 warnings.`,
+        );
+        expect(headline).not.toContain("LEAKING");
+      }
     },
     TIMEOUT_MS,
   );
@@ -401,12 +481,13 @@ describe("what decides the exit status", () => {
     async () => {
       // row_security = off in the database's defaults survives RESET ALL; the pinned settings of
       // every probe switch it back on, so the file still fails on the leak it must find.
-      const { ciExport } = await exportOf(TODOS_SHARING.leaky.scenario);
+      const exported = await exportOf(TODOS_SHARING.leaky.scenario);
+      const { ciExport } = exported;
       const engine = await prepareLikeWorkflow(ciExport);
       try {
         await engine.exec("set row_security = off");
         const outcome = await runTestFile(engine, fileOf(ciExport, TEST_SQL));
-        expect(reported(outcome)).toEqual(declared(TODOS_SHARING.leaky));
+        expect(reported(outcome, exported)).toEqual(declared(TODOS_SHARING.leaky));
       } finally {
         await engine.close();
       }

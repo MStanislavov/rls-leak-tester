@@ -271,7 +271,23 @@ describe("toErrorInfo", () => {
 
   it("copes with values that are not errors", () => {
     expect(toErrorInfo("plain")).toMatchObject({ message: "plain", code: null });
-    expect(toErrorInfo({ code: 7 })).toMatchObject({ message: "[object Object]", code: null });
+    expect(toErrorInfo(undefined)).toMatchObject({ message: "undefined", code: null });
+  });
+
+  it("shows the data of a thrown object that has no message, not [object Object]", () => {
+    expect(toErrorInfo({ code: 7 })).toMatchObject({ message: '{"code":7}', code: null });
+    expect(toErrorInfo({ rows: 9007199254740993n })).toMatchObject({
+      message: '{"rows":"9007199254740993"}',
+    });
+  });
+
+  it("falls back to the tag of an object that JSON cannot express", () => {
+    const cycle: Record<string, unknown> = {};
+    cycle.self = cycle;
+    expect(toErrorInfo(cycle)).toMatchObject({ message: "[object Object]", code: null });
+    expect(toErrorInfo({ toJSON: () => undefined })).toMatchObject({
+      message: "[object Object]",
+    });
   });
 });
 

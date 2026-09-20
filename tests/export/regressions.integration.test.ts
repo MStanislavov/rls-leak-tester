@@ -12,6 +12,7 @@ import type { Scenario } from "@/lib/scenario";
 import { TEMPLATES } from "@/lib/scenario/templates";
 import { SESSION_STATE, VOLATILE_KEYS, tableAddedLater, writeOnlyGrant } from "./fixtures";
 import {
+  cellIdsOf,
   dumpEverything,
   exportOf,
   failedCells,
@@ -47,7 +48,7 @@ async function cross(good: Scenario, regressed: Scenario): Promise<Crossed> {
 }
 
 function lines(outcome: TestFileOutcome): string[] {
-  return outcome.passed ? [] : failedCells(outcome.error).map((cell) => cell.line);
+  return outcome.passed ? [] : failedCells(outcome.error, []).map((cell) => cell.line);
 }
 
 function failing(exported: Exported): string[] {
@@ -97,7 +98,7 @@ describe("a good export against a regressed database", () => {
       const { regressed, outcome } = await cross(template.fixed.scenario, template.leaky.scenario);
       expect(outcome.passed).toBe(false);
       if (sameSeed) {
-        const reported = failedCells(outcome.passed ? never() : outcome.error)
+        const reported = failedCells(outcome.passed ? never() : outcome.error, cellIdsOf(regressed))
           .filter((cell) => !cell.line.startsWith("[setup]"))
           .map((cell) => `[${cell.status}] ${cell.id}`);
         expect(lines(outcome).filter((line) => line.startsWith("[setup]"))).toEqual([]);
@@ -141,7 +142,7 @@ describe("the same scenario in the lab and in CI", () => {
         if (!outcome.passed) {
           // labels has explicit keys: its 8 cells ran and passed; the 8 of todos did not run.
           expect(outcome.error.message).toMatch(
-            /^RLS Leak Tester: LEAKING or not proven\. 0 of 16 checked cells failed, 8 passed, 0 warnings\. Setup problems: 1; cells not run because of them: 8\.\n/,
+            /^RLS Leak Tester: NOT PROVEN, no leak or escape was measured\. Of 16 checked cells: 0 leaked or escaped, 0 overblocked, 0 inconclusive, 8 passed; 0 warnings\. Setup problems: 1; cells not run because of them: 8\.\n/,
           );
         }
       } finally {

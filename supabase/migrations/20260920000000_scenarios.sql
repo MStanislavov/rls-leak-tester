@@ -40,22 +40,28 @@ comment on table public.scenarios is
 
 create index scenarios_owner_updated_at_idx on public.scenarios (owner, updated_at desc);
 
--- updated_at is the server's clock, whatever the client sends.
-create function public.scenarios_touch_updated_at()
+-- created_at and updated_at are the server's clock, whatever the client sends: an INSERT cannot
+-- backdate or postdate a row, and an UPDATE cannot rewrite when it was created.
+create function public.scenarios_set_timestamps()
 returns trigger
 language plpgsql
 set search_path = ''
 as $$
 begin
+  if tg_op = 'INSERT' then
+    new.created_at := pg_catalog.now();
+  else
+    new.created_at := old.created_at;
+  end if;
   new.updated_at := pg_catalog.now();
   return new;
 end;
 $$;
 
-create trigger scenarios_touch_updated_at
-before update on public.scenarios
+create trigger scenarios_set_timestamps
+before insert or update on public.scenarios
 for each row
-execute function public.scenarios_touch_updated_at();
+execute function public.scenarios_set_timestamps();
 
 -- ENABLE switches the policies on; FORCE applies them to the table owner as well. Only a
 -- superuser or a role with BYPASSRLS (on Supabase: postgres, service_role) still gets past them.
@@ -94,14 +100,32 @@ using (visibility = 'public');
 -- have made are therefore written out in the WHERE clause. search_path is pinned to the empty
 -- string and every name is schema-qualified, so no caller can put an object in front of ours.
 -- auth.uid() reads the request's JWT claims, which the switch to the definer does not change.
+--
+-- It returns explicit columns, never the row type: the owner's auth.users id stays in the
+-- database. Whether the row is the caller's own is answered as a boolean instead.
 create function public.get_scenario_by_slug(p_slug text)
-returns setof public.scenarios
+returns table (
+  id uuid,
+  slug text,
+  title text,
+  payload jsonb,
+  visibility text,
+  updated_at timestamptz,
+  is_owner boolean
+)
 language sql
 stable
 security definer
 set search_path = ''
 as $$
-  select s.*
+  select
+    s.id,
+    s.slug,
+    s.title,
+    s.payload,
+    s.visibility,
+    s.updated_at,
+    coalesce(s.owner = (select auth.uid()), false) as is_owner
   from public.scenarios as s
   where s.slug = p_slug
     and (
@@ -111,11 +135,11 @@ as $$
 $$;
 
 comment on function public.get_scenario_by_slug(text) is
-  'Returns the scenario with exactly this slug when it is public or unlisted, or when the caller owns it.';
+  'Returns the scenario with exactly this slug when it is public or unlisted, or when the caller owns it. Explicit columns and is_owner; never the owner id.';
 
 -- Postgres grants EXECUTE to PUBLIC on every new function, and a legacy Supabase project grants
 -- it to the API roles by default privileges. Take both away, then grant what is needed.
 revoke all on function public.get_scenario_by_slug(text) from public, anon, authenticated, service_role;
 grant execute on function public.get_scenario_by_slug(text) to anon, authenticated;
 
-revoke all on function public.scenarios_touch_updated_at() from public, anon, authenticated, service_role;
+revoke all on function public.scenarios_set_timestamps() from public, anon, authenticated, service_role;

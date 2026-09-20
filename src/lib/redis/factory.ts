@@ -72,7 +72,7 @@ interface Slot {
  */
 const SLOT = Symbol.for("rls-leak-tester.redis-services");
 
-type SlotHolder = typeof globalThis & { [SLOT]?: Slot | undefined };
+type SlotHolder = typeof globalThis & { [SLOT]?: Slot };
 
 /**
  * The services of this process: one client, one in-memory limiter. The same

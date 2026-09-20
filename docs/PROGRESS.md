@@ -277,3 +277,65 @@ timeout when every worker booted WASM at once; `vitest.config.mts` now sets watc
 - The landing page ships a zod chunk (96 KB gzip) it does not need.
 - Not verifiable here: the exported workflow on GitHub's runners, a live Anthropic stream, a real
   Supabase project (all account-bound).
+
+## Phase 8: the quality gate (2026-09-20)
+
+### Done
+
+- SonarQube Community 26.9 (native arm64) through `docker compose`; `scripts/sonar/bootstrap.sh` is
+  idempotent (run twice): waits for UP, rotates the admin password, creates the project
+  `postgres-rls-leak-tester`, generates the analysis token, stores both only in the git-ignored
+  `.env.sonar` (mode 600), creates the gate `RLS Leak Tester` and assigns it. The web API calls and
+  metric keys were read from the running server (it runs in MQR mode), not guessed (ADR 0029).
+- Gate conditions on overall AND new code: coverage >= 80, duplicated lines <= 3 percent,
+  reliability / security / maintainability rating A, hotspots reviewed 100 percent, zero blocker and
+  zero high (the MQR name of critical) issues; plus the server's own `new_violations = 0`.
+- `sonar-project.properties` with every exclusion listed in `rules.yaml` with its reason; coverage
+  exclusions only `src/app/**` and `src/components/**`. The Vitest coverage scope was widened to
+  everything Sonar counts (scripts and root config too) so lcov tells Sonar the truth; the 80/80
+  threshold for `src/lib/**` is kept separately.
+- `npm run quality` (`scripts/quality.mjs`, unit-tested): Sonar preflight, format, lint, typecheck,
+  rules, unit tests with coverage on real Redis, build, e2e in production mode, Sonar scan with gate
+  wait; fail-fast with the failed stage and the re-run command.
+- Baseline scan: gate ERROR with 319 open issues (3 blocker, 26 high; reliability D, security B).
+  Two fix rounds by area (refactoring for cognitive complexity, sort comparators, a real Redis
+  adapter bug, accessibility rules in TSX, CSS) without any exclusion, NOSONAR, won't-fix or gate
+  change; golden snapshots byte-identical. Scan 3: gate OK. Findings and reasoning in
+  `docs/sonar-triage.md` (ADRs 0031, 0032).
+- CI: `.github/workflows/ci.yml` with five jobs (static, unit with a Redis service, build + e2e,
+  self-isolation proof against a Postgres 18 service, Sonar scan that skips cleanly without a token
+  through an environment indirection), SHA-pinned actions, `contents: read`; Dependabot for npm and
+  Actions; structure pinned by `tests/ci/workflow.test.ts`; actionlint clean; the self-isolation job
+  was rehearsed locally with Docker (ADR 0030).
+- Minor review findings closed (ADR 0028): slug cache invalidation race, `get_scenario_by_slug`
+  no longer returns the owner id, server-side timestamps, statement shown for a failed
+  `expectedRowsSql`, a "Timed out" cell label, export message wording, delimiter-safe comparators,
+  no zod chunk on the landing page.
+- `npm audit`: the `adm-zip` advisory through dev-only `@sonar/scan` is cleared with an npm
+  `overrides` entry (0.6.1); 0 vulnerabilities; the scanner was re-run with it.
+- `security-reviewer` run near the end (delta since the full review): no blocker or major; two
+  hardening items done (CI scanner call uses `npx --no-install`; `scan.sh` parses `.env.sonar`
+  instead of sourcing it). Known and accepted: the owner id of PUBLIC scenarios is readable through
+  the table by design of a public listing.
+
+### Verified (orchestrator, final tree)
+
+`npm run quality` exit 0: all 9 stages. Unit: 132 files, 2659 tests passed; coverage over the
+widened scope 95.2 percent lines, 90.92 branches. Build ok. Playwright (production): 63 passed.
+Sonar: `QUALITY GATE STATUS: PASSED`; coverage 93.5, duplication 0.0, ratings A/A/A, 0 hotspots,
+0 blocker, 0 high, 7 open medium maintainability issues (typescript:S6819, documented).
+
+## Phase 9: documents and skills (2026-09-20)
+
+- `README.md` (core principle first, real screenshot, zero-config quick start, optional
+  capabilities, the gate), `docs/DEPLOY.md` (owner's ordered manual checklist incl. custom domain
+  and DNS, Supabase, Redis, SonarCloud, trusted-proxy assumption), `SECURITY.md`, `CHANGELOG.md`.
+- Six skills under `.claude/skills/` (quality-gate, add-template, add-static-check, debug-probe,
+  sonar-triage, release), final `CLAUDE.md`; `tests/hooks/governance.test.ts` now requires them.
+- Governance coherence review: one major (DEPLOY.md claimed there is no git remote) fixed.
+
+### Note on the git remote (definition of done: "no pushes")
+
+`origin` = `https://github.com/MStanislavov/rls-leak-tester.git` exists because the owner asked for
+it before the build and had the initial `.gitignore` commit (`eed8508`) pushed. The build itself
+pushed nothing: `origin/main` is still `eed8508`, `main` is ahead by the build commits.

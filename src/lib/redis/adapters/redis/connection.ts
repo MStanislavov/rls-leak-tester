@@ -28,13 +28,13 @@ export type RedisClient = Pick<
 export interface RedisConnectionOptions {
   /** `redis://` or `rediss://`, validated by `src/lib/config`. */
   readonly url: string;
-  readonly connectTimeoutMs?: number | undefined;
-  readonly commandTimeoutMs?: number | undefined;
-  readonly reconnectCooldownMs?: number | undefined;
+  readonly connectTimeoutMs?: number;
+  readonly commandTimeoutMs?: number;
+  readonly reconnectCooldownMs?: number;
   /** Defaults to `Date.now`. */
-  readonly clock?: Clock | undefined;
+  readonly clock?: Clock;
   /** Defaults to a real ioredis client. */
-  readonly createClient?: ((url: string, options: RedisOptions) => RedisClient) | undefined;
+  readonly createClient?: (url: string, options: RedisOptions) => RedisClient;
 }
 
 export const REDIS_CONNECTION_DEFAULTS = {
@@ -95,8 +95,9 @@ export class RedisConnection {
 
   private async readyClient(): Promise<RedisClient> {
     const client = (this.client ??= this.open());
-    if (client.status === "ready") return client;
-    await (this.connecting ?? this.connect(client));
+    if (client.status !== "ready") {
+      await (this.connecting ?? this.connect(client));
+    }
     return client;
   }
 

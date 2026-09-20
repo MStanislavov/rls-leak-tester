@@ -40,7 +40,7 @@ export async function generateMetadata({ params }: PageProps<"/s/[slug]">): Prom
   };
 }
 
-export default async function SharedScenarioPage({ params }: PageProps<"/s/[slug]">) {
+export default async function SharedScenarioPage({ params }: Readonly<PageProps<"/s/[slug]">>) {
   const loaded = await load(params);
   const initial = loaded === null ? null : toSharedServerResult(loaded.result);
   if (loaded === null || initial === null) {

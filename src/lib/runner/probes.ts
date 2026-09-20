@@ -112,8 +112,10 @@ function keyMatch(table: ProbeTable, key: string): Part[] {
   }
   const parts: Part[] = [];
   table.primaryKey.forEach((column, index) => {
-    parts.push(`${index === 0 ? "" : " and "}${quoteIdent(column)}::text = `);
-    parts.push(param(values[index] ?? null));
+    parts.push(
+      `${index === 0 ? "" : " and "}${quoteIdent(column)}::text = `,
+      param(values[index] ?? null),
+    );
   });
   return parts;
 }
@@ -148,9 +150,11 @@ const PINNED_SETTINGS: readonly (readonly [string, string])[] = [
   ["TimeZone", "UTC"],
 ];
 
-const PIN_SETTINGS_PROBE: Probe = staticProbe(
-  `select ${PINNED_SETTINGS.map(([name, value]) => `set_config(${quoteLiteral(name)}, ${quoteLiteral(value)}, true)`).join(", ")}`,
-);
+const PIN_SETTINGS_CALLS = PINNED_SETTINGS.map(
+  ([name, value]) => `set_config(${quoteLiteral(name)}, ${quoteLiteral(value)}, true)`,
+).join(", ");
+
+const PIN_SETTINGS_PROBE: Probe = staticProbe(`select ${PIN_SETTINGS_CALLS}`);
 
 /**
  * The role switch, the claims and the pinned settings, all transaction-local. `SET LOCAL ROLE`
@@ -291,8 +295,11 @@ export function deleteRowProbe(table: ProbeTable, key: string): Probe {
 function assignments(moves: readonly ColumnValue[]): Part[] {
   const parts: Part[] = [];
   moves.forEach((move, index) => {
-    parts.push(`${index === 0 ? "" : ", "}${quoteIdent(move.column)} = `);
-    parts.push(param(move.value), `::${move.type}`);
+    parts.push(
+      `${index === 0 ? "" : ", "}${quoteIdent(move.column)} = `,
+      param(move.value),
+      `::${move.type}`,
+    );
   });
   return parts;
 }

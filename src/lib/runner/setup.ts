@@ -65,10 +65,10 @@ export interface SetupErrorFields {
   /** The SQLSTATE, or `null` when the engine failed before Postgres judged the statement. */
   readonly sqlState: string | null;
   readonly message: string;
-  readonly detail?: string | undefined;
-  readonly hint?: string | undefined;
+  readonly detail?: string;
+  readonly hint?: string;
   /** One-based character offset INTO `statement` that Postgres points at, when it does. */
-  readonly position?: number | undefined;
+  readonly position?: number;
 }
 
 /**

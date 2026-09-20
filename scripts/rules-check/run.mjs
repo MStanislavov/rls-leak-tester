@@ -26,6 +26,7 @@ import {
   SKIP_DIRS,
 } from "./repo.mjs";
 import { RULES_FILE, SCHEMA_RULE_ID, SELF_SCRIPT, validateRulesFile } from "./schema.mjs";
+import { byCodeUnit } from "./text.mjs";
 
 /**
  * @typedef {import("./schema.mjs").Violation} Violation
@@ -49,6 +50,39 @@ const COVERAGE_FLOOR = 80;
 const ROUTE_LINES_CEILING = 80;
 
 /**
+ * The rules rules.yaml marks as enforced by this script are exactly the ones it implements.
+ * @param {readonly string[]} marked
+ * @param {(id: string, message: string) => void} report
+ */
+function checkMarkedRules(marked, report) {
+  for (const id of marked) {
+    if (!IMPLEMENTED_RULES.includes(id)) {
+      report(id, `${id} is marked ${SELF_SCRIPT} but the script has no check for it`);
+    }
+  }
+  for (const id of IMPLEMENTED_RULES) {
+    if (!marked.includes(id)) {
+      report(
+        id,
+        `the script implements ${id}, so its enforced_by must include ${SELF_SCRIPT}: a check is never switched off by editing rules.yaml`,
+      );
+    }
+  }
+}
+
+/**
+ * The scripts a rule names as its enforcer (`script:<path>`).
+ * @param {string | readonly string[]} enforcedBy
+ * @returns {string[]}
+ */
+function enforcerScripts(enforcedBy) {
+  const enforcers = Array.isArray(enforcedBy) ? enforcedBy : [enforcedBy];
+  return enforcers
+    .filter((enforcer) => enforcer.startsWith("script:"))
+    .map((enforcer) => enforcer.slice("script:".length));
+}
+
+/**
  * Problems in how rules.yaml and this script refer to each other.
  * @param {import("./schema.mjs").RulesFileResult} rulesFile
  * @param {import("./checks.mjs").RepoView} repo
@@ -61,30 +95,14 @@ function checkRegistry(rulesFile, repo) {
   const report = (line, message) => {
     violations.push({ rule: SCHEMA_RULE_ID, path: RULES_FILE, line, message });
   };
-  const marked = rulesFile.scriptRuleIds;
-  if (marked !== null) {
-    for (const id of marked) {
-      if (!IMPLEMENTED_RULES.includes(id)) {
-        report(
-          rulesFile.ruleLines.get(id) ?? 1,
-          `${id} is marked ${SELF_SCRIPT} but the script has no check for it`,
-        );
-      }
-    }
-    for (const id of IMPLEMENTED_RULES) {
-      if (!marked.includes(id)) {
-        report(
-          rulesFile.ruleLines.get(id) ?? 1,
-          `the script implements ${id}, so its enforced_by must include ${SELF_SCRIPT}: a check is never switched off by editing rules.yaml`,
-        );
-      }
-    }
+  if (rulesFile.scriptRuleIds !== null) {
+    checkMarkedRules(rulesFile.scriptRuleIds, (id, message) => {
+      report(rulesFile.ruleLines.get(id) ?? 1, message);
+    });
   }
   for (const [index, rule] of (rulesFile.data?.rules ?? []).entries()) {
-    const enforcers = Array.isArray(rule.enforced_by) ? rule.enforced_by : [rule.enforced_by];
-    for (const enforcer of enforcers) {
-      const script = enforcer.startsWith("script:") ? enforcer.slice("script:".length) : null;
-      if (script !== null && !repo.exists(script)) {
+    for (const script of enforcerScripts(rule.enforced_by)) {
+      if (!repo.exists(script)) {
         report(
           rulesFile.ruleLines.get(rule.id) ?? index + 1,
           `${rule.id} is enforced by ${script}, which does not exist`,
@@ -118,43 +136,33 @@ function sortedUnique(violations) {
 }
 
 /**
- * @param {RulesCheckOptions} options
- * @returns {RulesCheckResult}
+ * rules.yaml as the checks need it, and what is wrong with the file itself.
+ * @param {import("./checks.mjs").RepoView} repo
+ * @returns {{ rulesFile: import("./schema.mjs").RulesFileResult | null, violations: Violation[] }}
  */
-export function runRulesCheck(options) {
-  const started = performance.now();
-  const root = resolveRoot(options.root);
-  const git = options.git ?? {
-    ...createGitInfo(root),
-    trackedAmong: (/** @type {string[]} */ paths) => gitTrackedAmong(root, paths),
-  };
-  const fast = options.paths !== undefined && options.paths !== null;
-  const unignored = fast ? null : git.unignored();
-  const repo = createRepoView(root, { keep: unignored === null ? null : new Set(unignored) });
-
-  /** @type {Violation[]} */
-  const violations = [];
+function readRulesFile(repo) {
   const rulesText = repo.read(RULES_FILE);
-  const rulesFile = rulesText === null ? null : validateRulesFile(rulesText);
-  if (rulesFile === null) {
-    violations.push({
+  if (rulesText === null) {
+    const missing = {
       rule: SCHEMA_RULE_ID,
       path: RULES_FILE,
       line: 1,
       message: "rules.yaml is missing: it is the source of truth for every rule",
-    });
-  } else {
-    violations.push(...rulesFile.violations, ...checkRegistry(rulesFile, repo));
+    };
+    return { rulesFile: null, violations: [missing] };
   }
+  const rulesFile = validateRulesFile(rulesText);
+  return { rulesFile, violations: [...rulesFile.violations, ...checkRegistry(rulesFile, repo)] };
+}
 
-  // An unreadable rule list never switches a check off: then every implemented check runs.
-  const marked = rulesFile?.scriptRuleIds ?? null;
-  const enabled = new Set(
-    marked === null ? IMPLEMENTED_RULES : marked.filter((id) => IMPLEMENTED_RULES.includes(id)),
-  );
+/**
+ * The thresholds of rules.yaml, never looser than the floors of this script.
+ * @param {import("./schema.mjs").RulesFileResult | null} rulesFile
+ * @returns {import("./checks.mjs").CheckContext}
+ */
+function contextOf(rulesFile) {
   const thresholds = rulesFile?.data?.thresholds;
-  /** @type {import("./checks.mjs").CheckContext} */
-  const context = {
+  return {
     routeMaxLines: Math.min(
       ROUTE_LINES_CEILING,
       thresholds?.architecture.route_handler_max_lines ?? ROUTE_LINES_CEILING,
@@ -169,19 +177,69 @@ export function runRulesCheck(options) {
     exclusions: rulesFile?.data ? rulesFile.exclusions : null,
     skipDirs: SKIP_DIRS,
   };
+}
 
-  const files = fast ? normalizeInputPaths(root, options.paths ?? [], options.cwd) : repo.list("");
+/**
+ * Runs the enabled file checks over `files`.
+ * @param {import("./checks.mjs").RepoView} repo
+ * @param {readonly string[]} files
+ * @param {ReadonlySet<string>} enabled
+ * @param {import("./checks.mjs").CheckContext} context
+ * @returns {{ violations: Violation[], filesChecked: number }}
+ */
+function runFileChecks(repo, files, enabled, context) {
+  /** @type {Violation[]} */
+  const violations = [];
   const fileChecks = FILE_CHECKS.filter((check) => enabled.has(check.rule));
   let filesChecked = 0;
   for (const path of files) {
     const applicable = fileChecks.filter((check) => check.applies(path));
-    if (applicable.length === 0) continue;
-    const content = repo.read(path);
+    const content = applicable.length === 0 ? null : repo.read(path);
     if (content === null) continue;
     filesChecked += 1;
     const source = makeSource(path, content);
     for (const check of applicable) violations.push(...check.run(source, context));
   }
+  return { violations, filesChecked };
+}
+
+/**
+ * Fast mode asks git about the environment file names it was given, and only when there is one.
+ * @param {NonNullable<RulesCheckOptions["git"]>} git
+ * @param {readonly string[]} files
+ * @returns {string[]}
+ */
+function trackedAmongGiven(git, files) {
+  const envFiles = files.filter(isEnvFile);
+  return envFiles.length === 0 ? [] : (git.trackedAmong?.(envFiles) ?? []);
+}
+
+/**
+ * @param {RulesCheckOptions} options
+ * @returns {RulesCheckResult}
+ */
+export function runRulesCheck(options) {
+  const started = performance.now();
+  const root = resolveRoot(options.root);
+  const git = options.git ?? {
+    ...createGitInfo(root),
+    trackedAmong: (/** @type {string[]} */ paths) => gitTrackedAmong(root, paths),
+  };
+  const fast = options.paths !== undefined && options.paths !== null;
+  const unignored = fast ? null : git.unignored();
+  const repo = createRepoView(root, { keep: unignored === null ? null : new Set(unignored) });
+
+  const { rulesFile, violations } = readRulesFile(repo);
+  // An unreadable rule list never switches a check off: then every implemented check runs.
+  const marked = rulesFile?.scriptRuleIds ?? null;
+  const enabled = new Set(
+    marked === null ? IMPLEMENTED_RULES : marked.filter((id) => IMPLEMENTED_RULES.includes(id)),
+  );
+  const context = contextOf(rulesFile);
+
+  const files = fast ? normalizeInputPaths(root, options.paths ?? [], options.cwd) : repo.list("");
+  const fileResults = runFileChecks(repo, files, enabled, context);
+  violations.push(...fileResults.violations);
 
   for (const check of REPO_CHECKS) {
     if (!enabled.has(check.rule)) continue;
@@ -190,12 +248,7 @@ export function runRulesCheck(options) {
   }
 
   if (enabled.has(GIT_CHECK_RULE)) {
-    const envFiles = files.filter(isEnvFile);
-    const tracked = fast
-      ? envFiles.length === 0
-        ? []
-        : (git.trackedAmong?.(envFiles) ?? [])
-      : (git.tracked() ?? []);
+    const tracked = fast ? trackedAmongGiven(git, files) : (git.tracked() ?? []);
     violations.push(...checkTrackedEnvFiles(tracked));
   }
 
@@ -204,8 +257,8 @@ export function runRulesCheck(options) {
     mode: fast ? "fast" : "full",
     ok: result.length === 0,
     violations: result,
-    filesChecked,
-    rulesRun: [...enabled].sort(),
+    filesChecked: fileResults.filesChecked,
+    rulesRun: [...enabled].sort(byCodeUnit),
     durationMs: Math.round(performance.now() - started),
   };
 }
@@ -220,8 +273,9 @@ export function formatResult(result) {
     (violation) => `${violation.rule} ${violation.path}:${violation.line} ${violation.message}`,
   );
   const count = result.violations.length;
+  const found = `${count} ${count === 1 ? "violation" : "violations"}`;
   lines.push(
-    `rules-check (${result.mode}): ${count === 0 ? "ok" : `${count} violation${count === 1 ? "" : "s"}`}, ` +
+    `rules-check (${result.mode}): ${count === 0 ? "ok" : found}, ` +
       `${result.rulesRun.length} script rules, ${result.filesChecked} files, ${result.durationMs} ms`,
   );
   return lines.join("\n");

@@ -21,6 +21,8 @@ export const GET_BY_SLUG_FUNCTION = "get_scenario_by_slug";
 
 const SUMMARY_COLUMNS = "id, slug, owner, title, visibility, updated_at";
 const ROW_COLUMNS = `${SUMMARY_COLUMNS}, payload`;
+/** What `get_scenario_by_slug` returns: the owner's user id is not among its columns. */
+const SHARED_COLUMNS = "id, slug, title, visibility, updated_at, payload, is_owner";
 
 /** `timestamptz` as PostgREST prints it (an offset, microseconds), normalised to ISO 8601 UTC. */
 const timestampSchema = z
@@ -39,6 +41,7 @@ const summaryRowSchema = z.object({
   updated_at: timestampSchema,
 });
 const fullRowSchema = summaryRowSchema.extend({ payload: z.unknown() });
+const sharedRowSchema = fullRowSchema.omit({ owner: true }).extend({ is_owner: z.boolean() });
 
 export interface ScenarioSummaryRow {
   id: string;
@@ -51,6 +54,11 @@ export interface ScenarioSummaryRow {
 
 export interface ScenarioRow extends ScenarioSummaryRow {
   scenario: Scenario;
+}
+
+/** A row read by its slug. Whose it is stays in the database; only "is it the caller's" leaves. */
+export interface SharedScenarioRow extends Omit<ScenarioRow, "owner"> {
+  isOwner: boolean;
 }
 
 export interface ScenarioRowInput {
@@ -69,7 +77,7 @@ export interface ScenarioRepository {
   /** The owner of a row the caller can see (own or public), without reading its payload. */
   ownerOf(id: string): Promise<string | undefined>;
   /** Through `get_scenario_by_slug`: public, unlisted, or the caller's own. */
-  findBySlug(slug: string): Promise<ScenarioRow | undefined>;
+  findBySlug(slug: string): Promise<SharedScenarioRow | undefined>;
   /** `"slug-taken"` when the unique constraint on the slug refused the insert. */
   insert(input: ScenarioRowInput): Promise<ScenarioRow | "slug-taken">;
   update(id: string, ownerId: string, patch: ScenarioRowPatch): Promise<ScenarioRow | undefined>;
@@ -123,16 +131,34 @@ function parseSummaryRows(data: unknown, operation: string): ScenarioSummaryRow[
   return rows.data.map(({ updated_at: updatedAt, ...row }) => ({ ...row, updatedAt }));
 }
 
-function parseFirstRow(data: unknown, operation: string): ScenarioRow | undefined {
+/** The first row of a PostgREST answer, validated by `schema`; its payload parsed as a scenario. */
+function parseFirst<T extends { payload?: unknown }>(
+  schema: z.ZodType<T>,
+  data: unknown,
+  operation: string,
+): { row: T; scenario: Scenario } | undefined {
   const rows = z.array(z.unknown()).safeParse(data);
   if (!rows.success) throw corrupt(operation);
   if (rows.data.length === 0) return undefined;
-  const row = fullRowSchema.safeParse(rows.data[0]);
+  const row = schema.safeParse(rows.data[0]);
   if (!row.success) throw corrupt(operation);
   const scenario = parseScenario(row.data.payload);
   if (!scenario.ok) throw corrupt(operation);
-  const { id, slug, owner, title, visibility, updated_at: updatedAt } = row.data;
-  return { id, slug, owner, title, visibility, updatedAt, scenario: scenario.scenario };
+  return { row: row.data, scenario: scenario.scenario };
+}
+
+function parseFirstRow(data: unknown, operation: string): ScenarioRow | undefined {
+  const first = parseFirst(fullRowSchema, data, operation);
+  if (first === undefined) return undefined;
+  const { id, slug, owner, title, visibility, updated_at: updatedAt } = first.row;
+  return { id, slug, owner, title, visibility, updatedAt, scenario: first.scenario };
+}
+
+function parseSharedRow(data: unknown, operation: string): SharedScenarioRow | undefined {
+  const first = parseFirst(sharedRowSchema, data, operation);
+  if (first === undefined) return undefined;
+  const { id, slug, title, visibility, updated_at: updatedAt, is_owner: isOwner } = first.row;
+  return { id, slug, title, visibility, updatedAt, isOwner, scenario: first.scenario };
 }
 
 function toColumns(patch: ScenarioRowPatch): Record<string, unknown> {
@@ -181,10 +207,10 @@ export function createSupabaseScenarioRepository(client: SupabaseClient): Scenar
     findBySlug: async (slug) => {
       const { data, error } = await client
         .rpc(GET_BY_SLUG_FUNCTION, { p_slug: slug })
-        .select(ROW_COLUMNS)
+        .select(SHARED_COLUMNS)
         .limit(1);
       if (error !== null) throw toStoreError(error, "find-by-slug");
-      return parseFirstRow(data, "find-by-slug");
+      return parseSharedRow(data, "find-by-slug");
     },
 
     insert: async (input) => {

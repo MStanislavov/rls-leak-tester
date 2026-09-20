@@ -54,6 +54,71 @@ function siteOrigin(): string {
   return getPublicConfig().siteUrl ?? window.location.origin;
 }
 
+/** What the dialog offers before there is a session: the way to get one. */
+function SignedOutPanel({
+  signInEnabled,
+  onSignIn,
+}: {
+  readonly signInEnabled: boolean;
+  readonly onSignIn: () => void;
+}) {
+  return (
+    <div className="flex flex-col items-start gap-2" data-testid="share-signed-out">
+      <p className="text-sm">
+        Sign in with GitHub to share. Your work is kept: when it has changes, a copy is saved in
+        this browser first and reopened after you come back.
+      </p>
+      <Button
+        type="button"
+        disabled={!signInEnabled}
+        data-testid="share-sign-in"
+        onClick={onSignIn}
+      >
+        <LogIn aria-hidden="true" />
+        Sign in with GitHub
+      </Button>
+      {signInEnabled ? null : (
+        <p className="text-xs text-muted-foreground">
+          This build was made without the public Supabase variables, so it has no sign-in. Rebuild
+          with them set; see docs/DEPLOY.md.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** The link of the copy this lab session shared; nothing before the first share. */
+function SharedLink({
+  shared,
+  inputId,
+}: {
+  readonly shared: StoredScenario | null;
+  readonly inputId: string;
+}) {
+  if (shared === null) {
+    return null;
+  }
+  const url = sharedUrl(siteOrigin(), shared.slug);
+  return (
+    <div className="flex min-w-0 flex-col gap-1" data-testid="share-result">
+      <Label htmlFor={inputId}>
+        Link ({shared.visibility}). It shows the scenario as it was when you shared it.
+      </Label>
+      <div className="flex min-w-0 items-center gap-1.5">
+        <Input
+          id={inputId}
+          readOnly
+          data-testid="share-link"
+          className="h-8 min-w-0 flex-1 font-mono text-xs"
+          value={url}
+          onFocus={(event) => event.currentTarget.select()}
+        />
+        <CopyButton text={url} label="Copy the link" testId="share-link-copy" />
+      </div>
+    </div>
+  );
+}
+
 export function ShareDialog({ lab, shared, onShared, visibility, onVisibility }: ShareDialogProps) {
   const store = useMemo(() => createRemoteScenarioStore(), []);
   const auth = useMemo(() => getAuthClient(), []);
@@ -78,6 +143,8 @@ export function ShareDialog({ lab, shared, onShared, visibility, onVisibility }:
   // A link belongs to the scenario it was made from, not to whatever is open now.
   const current = shared !== null && shared.scenario.id === lab.scenario.id ? shared : null;
   const valid = lab.validation.scenario !== null;
+  // A session that could not be read outranks the error of the last action.
+  const errorMessage = session?.status === "error" ? session.message : error;
 
   const fail = useCallback((cause: unknown) => setError(shareErrorMessage(cause)), []);
 
@@ -173,27 +240,7 @@ export function ShareDialog({ lab, shared, onShared, visibility, onVisibility }:
       ) : null}
 
       {session?.status === "signed-out" ? (
-        <div className="flex flex-col items-start gap-2" data-testid="share-signed-out">
-          <p className="text-sm">
-            Sign in with GitHub to share. Your work is kept: when it has changes, a copy is saved in
-            this browser first and reopened after you come back.
-          </p>
-          <Button
-            type="button"
-            disabled={!auth.enabled}
-            data-testid="share-sign-in"
-            onClick={signIn}
-          >
-            <LogIn aria-hidden="true" />
-            Sign in with GitHub
-          </Button>
-          {auth.enabled ? null : (
-            <p className="text-xs text-muted-foreground">
-              This build was made without the public Supabase variables, so it has no sign-in.
-              Rebuild with them set; see docs/DEPLOY.md.
-            </p>
-          )}
-        </div>
+        <SignedOutPanel signInEnabled={auth.enabled} onSignIn={signIn} />
       ) : null}
 
       {session?.status === "signed-in" ? (
@@ -246,34 +293,13 @@ export function ShareDialog({ lab, shared, onShared, visibility, onVisibility }:
             )}
           </div>
 
-          {current === null ? null : (
-            <div className="flex min-w-0 flex-col gap-1" data-testid="share-result">
-              <Label htmlFor={`${groupId}-link`}>
-                Link ({current.visibility}). It shows the scenario as it was when you shared it.
-              </Label>
-              <div className="flex min-w-0 items-center gap-1.5">
-                <Input
-                  id={`${groupId}-link`}
-                  readOnly
-                  data-testid="share-link"
-                  className="h-8 min-w-0 flex-1 font-mono text-xs"
-                  value={sharedUrl(siteOrigin(), current.slug)}
-                  onFocus={(event) => event.currentTarget.select()}
-                />
-                <CopyButton
-                  text={sharedUrl(siteOrigin(), current.slug)}
-                  label="Copy the link"
-                  testId="share-link-copy"
-                />
-              </div>
-            </div>
-          )}
+          <SharedLink shared={current} inputId={`${groupId}-link`} />
         </>
       ) : null}
 
-      {error === null && session?.status !== "error" ? null : (
+      {errorMessage === null ? null : (
         <p role="alert" data-testid="share-error" className="text-sm font-medium text-status-leak">
-          {session?.status === "error" ? session.message : error}
+          {errorMessage}
         </p>
       )}
 

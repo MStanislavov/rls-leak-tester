@@ -17,9 +17,9 @@ const healthSchema = z.object({
 export type ExplainAvailability = "on" | "off" | "unknown";
 
 export interface ExplainAvailabilityOptions {
-  readonly signal?: AbortSignal | undefined;
+  readonly signal?: AbortSignal;
   /** Test seam; defaults to the global `fetch`. */
-  readonly fetch?: typeof fetch | undefined;
+  readonly fetch?: typeof fetch;
 }
 
 /** Pure: reads a parsed health body. */

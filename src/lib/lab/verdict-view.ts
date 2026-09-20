@@ -28,7 +28,8 @@ function plural(count: number, word: string): string {
   if (count === 1) {
     return `1 ${word}`;
   }
-  return `${count} ${word.endsWith("s") ? `${word}es` : `${word}s`}`;
+  const suffix = word.endsWith("s") ? "es" : "s";
+  return `${count} ${word}${suffix}`;
 }
 
 const NOUNS: Readonly<Record<CellStatus, string>> = {

@@ -6,10 +6,11 @@
  * (`.env`, `.env.local`, `.env.sonar`, …). Those are looked at by name only.
  */
 import { execFileSync } from "node:child_process";
-import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { accessSync, constants, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 
 import { isBinaryFile, isEnvFile } from "./checks.mjs";
+import { byCodeUnit } from "./text.mjs";
 
 /**
  * Directories at the repository root that the walk never enters: dependencies, git's own data and
@@ -46,13 +47,52 @@ export function isSkipped(relativePath) {
 }
 
 /**
+ * True when `target` is `dir` or lies below it. Both are absolute.
+ * @param {string} dir
+ * @param {string} target
+ */
+function isInside(dir, target) {
+  const relative = path.relative(dir, target);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+/**
+ * The absolute path of the git executable, or null. It is looked up here and not left to the
+ * operating system, because two kinds of PATH entry must never answer "which files does git
+ * track": a relative one, and a directory inside the repository. `npm run` puts
+ * node_modules/.bin first on PATH, so a package that ships a bin called "git" would otherwise
+ * run in place of git.
+ * @param {string} root absolute path of the repository
+ * @param {string} [searchPath] the PATH to search, `process.env.PATH` by default
+ * @returns {string | null}
+ */
+export function findGit(root, searchPath = process.env.PATH ?? "") {
+  const name = process.platform === "win32" ? "git.exe" : "git";
+  for (const entry of searchPath.split(path.delimiter)) {
+    if (!path.isAbsolute(entry)) continue;
+    try {
+      const dir = realpathSync(entry);
+      const candidate = path.join(dir, name);
+      if (isInside(realpathSync(root), dir) || !statSync(candidate).isFile()) continue;
+      accessSync(candidate, constants.X_OK);
+      return candidate;
+    } catch {
+      // Not a directory, no git in it, or not executable: the next entry.
+    }
+  }
+  return null;
+}
+
+/**
  * @param {string} root
  * @param {string[]} args
  * @returns {string[] | null} null when git is missing or `root` is not inside a work tree
  */
 function gitList(root, args) {
+  const git = findGit(root);
+  if (git === null) return null;
   try {
-    const output = execFileSync("git", ["-C", root, "ls-files", "-z", ...args], {
+    const output = execFileSync(git, ["-C", root, "ls-files", "-z", ...args], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
       maxBuffer: 64 * 1024 * 1024,
@@ -143,17 +183,19 @@ export function createRepoView(root, options = {}) {
           text = null;
         }
         // A NUL byte means a binary file with an unknown extension.
-        contents.set(relativePath, text !== null && text.includes("\0") ? null : text);
+        contents.set(relativePath, text?.includes("\0") ? null : text);
       }
       return contents.get(relativePath) ?? null;
     },
     list(dir) {
-      const key = dir.replace(/\/+$/, "");
+      let end = dir.length;
+      while (end > 0 && dir.charAt(end - 1) === "/") end -= 1;
+      const key = dir.slice(0, end);
       let found = listings.get(key);
       if (found === undefined) {
         found = [];
         if (!isSkipped(key)) walk(key, found);
-        found.sort();
+        found.sort(byCodeUnit);
         listings.set(key, found);
       }
       return found;
@@ -189,7 +231,7 @@ export function normalizeInputPaths(root, inputs, cwd = process.cwd()) {
     }
     if (!isSkipped(relativePath)) result.add(relativePath);
   }
-  return [...result].sort();
+  return [...result].sort(byCodeUnit);
 }
 
 /**

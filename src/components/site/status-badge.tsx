@@ -2,6 +2,7 @@ import {
   CircleCheck,
   CircleMinus,
   CircleQuestionMark,
+  Hourglass,
   OctagonAlert,
   ShieldAlert,
   ShieldCheck,
@@ -39,18 +40,24 @@ export const STATUS_CLASSES: Record<CellStatus, string> = {
   skipped: "border-dashed border-status-skipped/40 bg-status-skipped-bg text-status-skipped",
 };
 
+/** An inconclusive cell whose probe timed out: its own icon beside its own word ("Timed out"). */
+export const TIMED_OUT_ICON: LucideIcon = Hourglass;
+
 interface StatusBadgeProps {
   readonly status: CellStatus;
   readonly size?: "sm" | "md";
   readonly className?: string;
+  /** The word of a timed-out cell. The colours stay those of `status`; icon and word change. */
+  readonly timedOutLabel?: string;
 }
 
-export function StatusBadge({ status, size = "md", className }: StatusBadgeProps) {
-  const Icon = STATUS_ICONS[status];
-  const { label } = statusMeta(status);
+export function StatusBadge({ status, size = "md", className, timedOutLabel }: StatusBadgeProps) {
+  const Icon = timedOutLabel === undefined ? STATUS_ICONS[status] : TIMED_OUT_ICON;
+  const label = timedOutLabel ?? statusMeta(status).label;
   return (
     <span
       data-status={status}
+      data-timed-out={timedOutLabel === undefined ? undefined : true}
       className={cn(
         "inline-flex items-center gap-1 rounded-md border font-medium whitespace-nowrap",
         size === "sm" ? "px-1.5 py-0.5 text-xs" : "px-2 py-1 text-sm",

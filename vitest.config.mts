@@ -29,11 +29,22 @@ export default defineConfig({
       provider: "v8",
       reporter: ["text", "lcov", "json-summary"],
       reportsDirectory: "./coverage",
-      include: ["src/lib/**"],
+      // Everything SonarQube counts as coverable (sonar-project.properties: the whole repository
+      // minus src/app and src/components, which Playwright covers), so that coverage/lcov.info
+      // tells Sonar the truth about the scripts and the root configuration too, instead of
+      // leaving them at an assumed zero. Scripts that only ever run as a child process stay at
+      // zero here: v8 coverage does not follow a spawn.
+      include: ["src/lib/**", "src/*.ts", "scripts/**", "*.config.{ts,mts,mjs}"],
       exclude: ["src/lib/**/*.test.{ts,tsx}", "src/lib/**/*.d.ts"],
       thresholds: {
+        // Over everything included above ...
         lines: 80,
         branches: 80,
+        // ... and TEST-002 for the library by itself, which the wider scope must not dilute.
+        "src/lib/**": {
+          lines: 80,
+          branches: 80,
+        },
       },
     },
   },

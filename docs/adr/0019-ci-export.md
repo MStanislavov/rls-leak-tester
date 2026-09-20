@@ -1,4 +1,4 @@
-# ADR (draft): the CI export
+# ADR: the CI export
 
 - Status: proposed (draft, numbered by the orchestrator)
 - Date: 2026-09-20

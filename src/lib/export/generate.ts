@@ -73,13 +73,13 @@ export interface CiExportInput {
   /** `SUPABASE_SETUP_SQL` from `@/lib/engine/supabase-setup-sql`. Not used in postgres mode. */
   readonly supabase: SupabaseSetupSql;
   /** The product name in headers and messages; defaults to `DEFAULT_TOOL_NAME`. */
-  readonly toolName?: string | undefined;
+  readonly toolName?: string;
   /**
    * What a cell does whose probe failed for a reason that is not authorization. `fail` (the
    * default): CI proves every cell or fails. `warn`: it is listed and does not fail the run, as
    * in the lab, where an inconclusive cell stands beside the verdict.
    */
-  readonly inconclusive?: "fail" | "warn" | undefined;
+  readonly inconclusive?: "fail" | "warn";
 }
 
 export interface CiExport {

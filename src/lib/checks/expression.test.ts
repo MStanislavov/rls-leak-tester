@@ -130,6 +130,15 @@ describe("compareCheckToUsing", () => {
     ).toEqual({ looser: false });
   });
 
+  it("does not flag an OR-ed USING whose alternatives the check repeats in another order", () => {
+    expect(
+      compareCheckToUsing(
+        "((auth.uid() = user_id) OR is_public)",
+        "(is_public OR (auth.uid() = user_id))",
+      ),
+    ).toEqual({ looser: false });
+  });
+
   it("flags a check that drops AND-ed conditions of USING", () => {
     expect(compareCheckToUsing(OWN_AND_TENANT, OWN)).toEqual({
       looser: true,

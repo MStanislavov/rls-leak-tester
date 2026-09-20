@@ -5,7 +5,9 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { createPgliteEngine } from "@/lib/engine/pglite-engine";
 import { SUPABASE_SETUP_SQL } from "@/lib/engine/supabase-setup-sql";
 import type { Finding } from "@/lib/checks";
-import type { CellResult, MatrixResult, MatrixRun } from "@/lib/runner";
+import { toProbeFailure, type CellResult, type MatrixResult, type MatrixRun } from "@/lib/runner";
+import { EngineTimeoutError } from "@/lib/runner/types";
+import { statusMeta } from "@/lib/site/status";
 import { SetupError } from "@/lib/runner/setup";
 import { MULTI_TENANT_SAAS } from "@/lib/scenario/templates";
 import {
@@ -13,6 +15,8 @@ import {
   buildCellKeyLists,
   buildKeyList,
   buildSubProbeViews,
+  cellStatusView,
+  cellTimeout,
   cellTranscript,
   formatKey,
 } from "./cell-view";
@@ -56,6 +60,108 @@ function cell(id: string): CellResult {
   }
   return found;
 }
+
+describe("a cell whose probe timed out", () => {
+  const timeout = toProbeFailure(new EngineTimeoutError(5000));
+
+  /** What the runner records when the reach probe never came back: nothing reached, all "missing". */
+  function reachTimedOut(): CellResult {
+    const source = cell("alice|public.projects|select");
+    return {
+      ...source,
+      status: "inconclusive",
+      reason: timeout.message,
+      actualKeys: [],
+      leakedKeys: [],
+      missingKeys: source.expectedKeys,
+      error: timeout,
+      subProbes: [],
+    };
+  }
+
+  function subProbeTimedOut(): CellResult {
+    const source = cell("alice|public.projects|update");
+    const [first, ...rest] = source.subProbes;
+    if (first === undefined) throw new Error("The fixture cell has no sub-probe");
+    return {
+      ...source,
+      status: "inconclusive",
+      reason: timeout.message,
+      subProbes: [
+        { ...first, status: "inconclusive", outcome: "inconclusive", error: timeout },
+        ...rest,
+      ],
+    };
+  }
+
+  it("is told apart from every other inconclusive cell", () => {
+    expect(cellTimeout(reachTimedOut())).toBe("reach");
+    expect(cellTimeout(subProbeTimedOut())).toBe("sub-probe");
+    expect(cellTimeout(cell("alice|public.projects|select"))).toBeNull();
+    expect(
+      cellTimeout({ ...reachTimedOut(), error: { sqlState: "23505", message: "duplicate key" } }),
+    ).toBeNull();
+    // Only an inconclusive cell: a leak that was measured stays a leak.
+    expect(cellTimeout({ ...subProbeTimedOut(), status: "leak" })).toBeNull();
+  });
+
+  it("has its own words for the grid, the drawer and a screen reader", () => {
+    const view = cellStatusView(reachTimedOut());
+    expect(view).toMatchObject({ status: "inconclusive", timedOut: true, label: "Timed out" });
+    expect(view.meaning).toContain("Nothing was measured");
+    expect(view.meaning).not.toBe(statusMeta("inconclusive").meaning);
+
+    expect(cellStatusView(subProbeTimedOut())).toMatchObject({
+      timedOut: true,
+      label: "Timed out",
+    });
+    expect(cellStatusView(subProbeTimedOut()).meaning).toContain("sub-probe");
+    expect(buildSubProbeViews(subProbeTimedOut()).map((probe) => probe.timedOut)).toEqual(
+      subProbeTimedOut().subProbes.map((_probe, index) => index === 0),
+    );
+
+    const plain = cellStatusView(cell("alice|public.projects|select"));
+    expect(plain).toEqual({
+      status: "pass",
+      timedOut: false,
+      label: statusMeta("pass").label,
+      meaning: statusMeta("pass").meaning,
+    });
+  });
+
+  it("shows no missing rows in the grid when nothing was measured", () => {
+    const timedOut = reachTimedOut();
+    expect(timedOut.missingKeys.length).toBeGreaterThan(0);
+    const view = buildMatrixView({
+      ...result,
+      cells: result.cells.map((entry) => (entry.id === timedOut.id ? timedOut : entry)),
+    });
+    const shown = view.tables
+      .flatMap((table) => table.rows.flatMap((row) => row.cells))
+      .find((entry) => entry?.id === timedOut.id);
+
+    expect(shown).toMatchObject({
+      status: "inconclusive",
+      timedOut: true,
+      label: "Timed out",
+      leakedCount: 0,
+      missingCount: 0,
+    });
+  });
+
+  it("keeps the measured counts when only a sub-probe timed out", () => {
+    const timedOut = { ...subProbeTimedOut(), leakedKeys: ['["1"]'] };
+    const view = buildMatrixView({
+      ...result,
+      cells: result.cells.map((entry) => (entry.id === timedOut.id ? timedOut : entry)),
+    });
+    const shown = view.tables
+      .flatMap((table) => table.rows.flatMap((row) => row.cells))
+      .find((entry) => entry?.id === timedOut.id);
+
+    expect(shown).toMatchObject({ timedOut: true, label: "Timed out", leakedCount: 1 });
+  });
+});
 
 describe("buildMatrixView", () => {
   it("groups by table, one row per persona, four operation cells", () => {

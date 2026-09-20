@@ -183,6 +183,65 @@ function enforcersOf(value) {
 }
 
 /**
+ * @typedef {(path: ReadonlyArray<PropertyKey>) => number} LineAt the line of a path of the document
+ * @typedef {(line: number, message: string) => void} Report
+ */
+
+/**
+ * The ids of the raw rule list: the line each one is defined on and the ones this script enforces.
+ * A second definition of an id is reported.
+ * @param {unknown[]} rawRules
+ * @param {LineAt} lineAt
+ * @param {Report} report
+ */
+function indexRules(rawRules, lineAt, report) {
+  /** @type {Map<string, number>} */
+  const ruleLines = new Map();
+  /** @type {string[]} */
+  const scriptRuleIds = [];
+  rawRules.forEach((entry, index) => {
+    if (typeof entry !== "object" || entry === null) return;
+    const { id, enforced_by: enforcedBy } = /** @type {Record<string, unknown>} */ (entry);
+    if (typeof id !== "string") return;
+    const line = lineAt(["rules", index]);
+    if (ruleLines.has(id)) {
+      report(line, `duplicate rule id ${id} (first defined on line ${ruleLines.get(id)})`);
+    } else {
+      ruleLines.set(id, line);
+    }
+    if (enforcersOf(enforcedBy).includes(SELF_SCRIPT)) scriptRuleIds.push(id);
+  });
+  return { ruleLines, scriptRuleIds };
+}
+
+/**
+ * The exclusions with their lines. Reported: a duplicate, an unknown rule, and a rule-scope entry
+ * that names no rule.
+ * @param {RulesFile["exclusions"]} entries
+ * @param {ReadonlyMap<string, number>} ruleLines
+ * @param {LineAt} lineAt
+ * @param {Report} report
+ * @returns {ListedExclusion[]}
+ */
+function listExclusions(entries, ruleLines, lineAt, report) {
+  /** @type {Set<string>} */
+  const seen = new Set();
+  return entries.map((entry, index) => {
+    const line = lineAt(["exclusions", index]);
+    const key = `${entry.tool}\u0000${entry.rule ?? ""}\u0000${entry.pattern}`;
+    if (seen.has(key)) report(line, `duplicate exclusion ${entry.tool} ${entry.pattern}`);
+    seen.add(key);
+    if (entry.rule !== undefined && !ruleLines.has(entry.rule)) {
+      report(line, `exclusion ${entry.pattern} names the unknown rule ${entry.rule}`);
+    }
+    if (entry.tool === "rule-scope" && entry.rule === undefined) {
+      report(line, `exclusion ${entry.pattern} has tool rule-scope and must name its rule`);
+    }
+    return { ...entry, line };
+  });
+}
+
+/**
  * Parses and validates the text of rules.yaml.
  * @param {string} source
  * @returns {RulesFileResult}
@@ -236,28 +295,13 @@ export function validateRulesFile(source) {
       ? /** @type {unknown[]} */ (/** @type {any} */ (raw).rules)
       : null;
 
-  /** @type {Map<string, number>} */
-  const ruleLines = new Map();
-  /** @type {string[] | null} */
-  let scriptRuleIds = rawRules === null ? null : [];
-  if (rawRules !== null) {
-    rawRules.forEach((entry, index) => {
-      if (typeof entry !== "object" || entry === null) return;
-      const { id, enforced_by: enforcedBy } = /** @type {Record<string, unknown>} */ (entry);
-      if (typeof id !== "string") return;
-      const line = lineAt(["rules", index]);
-      if (ruleLines.has(id)) {
-        report(line, `duplicate rule id ${id} (first defined on line ${ruleLines.get(id)})`);
-      } else {
-        ruleLines.set(id, line);
-      }
-      if (enforcersOf(enforcedBy).includes(SELF_SCRIPT)) scriptRuleIds?.push(id);
-    });
-  }
+  // An unreadable rule list must never switch checks off: null makes the caller run every check.
+  const { ruleLines, scriptRuleIds } =
+    rawRules === null
+      ? { ruleLines: /** @type {Map<string, number>} */ (new Map()), scriptRuleIds: null }
+      : indexRules(rawRules, lineAt, report);
 
   if (!parsed.success) {
-    // An unreadable rule list must never switch checks off: the caller then runs every check.
-    if (rawRules === null) scriptRuleIds = null;
     return { data: null, violations, scriptRuleIds, ruleLines, exclusions: [] };
   }
 
@@ -278,25 +322,6 @@ export function validateRulesFile(source) {
     report(lineAt(["principles", 0]), "the first principle must be P1");
   }
 
-  /** @type {ListedExclusion[]} */
-  const exclusions = [];
-  /** @type {Set<string>} */
-  const seenExclusions = new Set();
-  data.exclusions.forEach((entry, index) => {
-    const line = lineAt(["exclusions", index]);
-    const key = `${entry.tool}\u0000${entry.rule ?? ""}\u0000${entry.pattern}`;
-    if (seenExclusions.has(key)) {
-      report(line, `duplicate exclusion ${entry.tool} ${entry.pattern}`);
-    }
-    seenExclusions.add(key);
-    if (entry.rule !== undefined && !ruleLines.has(entry.rule)) {
-      report(line, `exclusion ${entry.pattern} names the unknown rule ${entry.rule}`);
-    }
-    if (entry.tool === "rule-scope" && entry.rule === undefined) {
-      report(line, `exclusion ${entry.pattern} has tool rule-scope and must name its rule`);
-    }
-    exclusions.push({ ...entry, line });
-  });
-
+  const exclusions = listExclusions(data.exclusions, ruleLines, lineAt, report);
   return { data, violations, scriptRuleIds, ruleLines, exclusions };
 }

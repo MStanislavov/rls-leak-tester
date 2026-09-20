@@ -3,7 +3,14 @@
  * array of the key columns' text); long lists are capped with a count so that a table of ten
  * thousand leaked rows cannot freeze the drawer. Everything here ends up in text nodes.
  */
-import { parseKey, type CellResult, type SubProbeResult } from "@/lib/runner";
+import {
+  isTimeoutFailure,
+  parseKey,
+  type CellResult,
+  type CellStatus,
+  type SubProbeResult,
+} from "@/lib/runner";
+import { statusMeta } from "@/lib/site/status";
 import { SUB_PROBE_LABELS } from "./status-meta";
 
 export const KEY_LIST_CAP = 200;
@@ -44,6 +51,8 @@ export interface SubProbeView {
   /** What tells two sub-probes of one kind apart: the expectation and the source row. */
   readonly distinction: string;
   readonly probe: SubProbeResult;
+  /** This sub-probe ran into the statement timeout: its badge says "Timed out". */
+  readonly timedOut: boolean;
   readonly movedKeys: KeyListView;
 }
 
@@ -55,6 +64,7 @@ export function buildSubProbeViews(cell: Pick<CellResult, "subProbes">): SubProb
       title: SUB_PROBE_LABELS[probe.kind],
       distinction: `must be ${probe.expected}, ${source}`,
       probe,
+      timedOut: probe.error !== null && isTimeoutFailure(probe.error),
       movedKeys: buildKeyList(probe.movedKeys),
     };
   });
@@ -82,4 +92,53 @@ export function buildCellKeyLists(cell: CellResult): CellKeyLists {
 export function cellTranscript(cell: CellResult): string {
   const parts = [cell.sql, ...cell.subProbes.map((probe) => probe.sql)];
   return parts.filter((part) => part.trim() !== "").join("\n\n");
+}
+
+/** The word a timed-out cell carries instead of "Inconclusive". The status stays `inconclusive`. */
+export const TIMED_OUT_LABEL = "Timed out";
+
+const TIMED_OUT_MEANINGS = {
+  reach:
+    "The statement did not come back within the statement timeout, so the database was terminated and rebuilt. Nothing was measured: the rows listed as missing were never looked for. It counts neither as a pass nor as a leak.",
+  "sub-probe":
+    "A sub-probe did not come back within the statement timeout, so the database was terminated and rebuilt. What ran before it was measured; the cell as a whole counts neither as a pass nor as a leak.",
+} as const;
+
+/**
+ * Which statement of an inconclusive cell ran into the timeout: the reach probe, a sub-probe, or
+ * none (`null`). A cell with another status was measured, whatever a sub-probe did afterwards.
+ */
+export function cellTimeout(
+  cell: Pick<CellResult, "status" | "error" | "subProbes">,
+): keyof typeof TIMED_OUT_MEANINGS | null {
+  if (cell.status !== "inconclusive") return null;
+  if (cell.error !== null && isTimeoutFailure(cell.error)) return "reach";
+  const timedOut = cell.subProbes.some(
+    (probe) => probe.error !== null && isTimeoutFailure(probe.error),
+  );
+  return timedOut ? "sub-probe" : null;
+}
+
+export interface CellStatusView {
+  readonly status: CellStatus;
+  readonly timedOut: boolean;
+  /** The word next to the icon, in the grid, in the drawer and for a screen reader. */
+  readonly label: string;
+  readonly meaning: string;
+}
+
+/** A timed-out probe gets its own words: "Inconclusive, 1 missing" would claim a measurement. */
+export function cellStatusView(
+  cell: Pick<CellResult, "status" | "error" | "subProbes">,
+): CellStatusView {
+  const timeout = cellTimeout(cell);
+  const meta = statusMeta(cell.status);
+  return timeout === null
+    ? { status: cell.status, timedOut: false, label: meta.label, meaning: meta.meaning }
+    : {
+        status: cell.status,
+        timedOut: true,
+        label: TIMED_OUT_LABEL,
+        meaning: TIMED_OUT_MEANINGS[timeout],
+      };
 }

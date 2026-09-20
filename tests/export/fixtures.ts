@@ -245,27 +245,38 @@ export const NOTHING_TO_PROVE: Scenario = scenarioOf({
   personas: [{ id: "alice", label: "Alice", dbRole: "app_user", claims: { sub: ALICE } }],
 });
 
-/** Names, labels and claims that would break naive quoting: the exported file must still run. */
-export const HOSTILE_TEXT: Scenario = scenarioOf({
-  id: "export-hostile-text",
-  title: "Hostile $rls$ 'text' -- ; drop table",
-  schemaSql: `
+function hostileText(leaky: boolean): Scenario {
+  return scenarioOf({
+    id: leaky ? "export-hostile-text-leaky" : "export-hostile-text",
+    title: "Hostile $rls$ 'text' -- ; drop table",
+    schemaSql: `
     create role "app user" nologin;
     create table "Odd ""Table" ("Id" int primary key, "user id" uuid not null, note text);
     alter table "Odd ""Table" enable row level security;
-    create policy own on "Odd ""Table" for all using ("user id"::text = ${CLAIM("sub")});
+    create policy own on "Odd ""Table" for all using (${leaky ? "true" : `"user id"::text = ${CLAIM("sub")}`});
     grant select, insert, update, delete on "Odd ""Table" to "app user";
     insert into "Odd ""Table" values (1, '${ALICE}', 'it''s'), (2, '${BOB}', '$sql$');`,
-  personas: [
-    {
-      id: "alice",
-      label: "O'Brien $rls$ $sql$ \\ %s",
-      dbRole: "app user",
-      claims: { sub: ALICE, note: "it's $sql$ \\ $fn$ back" },
-    },
-  ],
-  tables: [{ schema: "public", name: 'Odd "Table', ownerColumn: "user id" }],
-});
+    personas: [
+      {
+        id: "alice",
+        label: "O'Brien $rls$ $sql$ \\ %s",
+        dbRole: "app user",
+        claims: { sub: ALICE, note: "it's $sql$ \\ $fn$ back" },
+      },
+    ],
+    tables: [{ schema: "public", name: 'Odd "Table', ownerColumn: "user id" }],
+  });
+}
+
+/** Names, labels and claims that would break naive quoting: the exported file must still run. */
+export const HOSTILE_TEXT: Scenario = hostileText(false);
+
+/**
+ * The same names with a policy that lets every row through. The green variant never reaches the
+ * comparison of failed cells, so only this one proves that a cell id with a space and a quote
+ * (`alice|public.Odd "Table|select`) is read back from the exception and compared.
+ */
+export const HOSTILE_TEXT_LEAKY: Scenario = hostileText(true);
 
 /**
  * Session state between the schema and the seed: the runner keeps one session for both, so the

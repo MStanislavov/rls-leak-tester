@@ -282,7 +282,7 @@ describe("parseScenario: shape", () => {
     );
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.issues.length).toBe(2);
+      expect(result.issues).toHaveLength(2);
       expect(result.message.split("\n")).toEqual(
         result.issues.map((issue) => `${issue.path}: ${issue.message}`),
       );

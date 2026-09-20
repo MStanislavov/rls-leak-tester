@@ -8,6 +8,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 
+import { AUTH_ERROR_CODES, AUTH_ERROR_PARAM, type AuthErrorCode } from "../auth-errors";
 import { isCrossSiteRequest } from "./http";
 
 export const AUTH_CALLBACK_PATH = "/auth/callback";
@@ -15,16 +16,7 @@ export const AUTH_SIGNOUT_PATH = "/auth/signout";
 /** Where a sign-in lands when `next` is missing or refused. */
 export const DEFAULT_AFTER_SIGN_IN = "/lab";
 export const DEFAULT_AFTER_SIGN_OUT = "/";
-/** Query parameter the landing page may read (with zod) to show a calm notice. */
-export const AUTH_ERROR_PARAM = "auth_error";
-
-export const AUTH_ERROR_CODES = [
-  "not_configured",
-  "missing_code",
-  "provider_error",
-  "exchange_failed",
-] as const;
-export type AuthErrorCode = (typeof AUTH_ERROR_CODES)[number];
+export { AUTH_ERROR_CODES, AUTH_ERROR_PARAM, type AuthErrorCode };
 export const authErrorSchema = z.enum(AUTH_ERROR_CODES);
 
 const nextSchema = z.string().min(1).max(2048);

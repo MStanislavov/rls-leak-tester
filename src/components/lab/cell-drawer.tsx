@@ -7,6 +7,7 @@
  */
 import { ShieldOff } from "lucide-react";
 import { useEffect, useMemo, useRef, type ReactNode } from "react";
+import { CodeListing, useScrollTabStop } from "@/components/site/scroll-region";
 import { StatusBadge } from "@/components/site/status-badge";
 import {
   Sheet,
@@ -18,14 +19,15 @@ import {
 } from "@/components/ui/sheet";
 import {
   SUB_PROBE_OUTCOME_LABELS,
+  TIMED_OUT_LABEL,
   buildCellKeyLists,
   buildSubProbeViews,
+  cellStatusView,
   cellTranscript,
   type KeyListView,
   type SubProbeView,
 } from "@/lib/lab";
 import type { CellPolicy, CellResult, MatrixPersona, ProbeFailure } from "@/lib/runner";
-import { statusMeta } from "@/lib/site/status";
 import { CopyButton } from "./copy-button";
 import { focusMatrixCell } from "./result-matrix";
 
@@ -58,26 +60,39 @@ function SqlBlock({
   readonly testId?: string;
 }) {
   return (
-    <pre
-      tabIndex={0}
-      role="group"
-      aria-label={label}
-      data-testid={testId}
+    <CodeListing
+      label={label}
+      testId={testId}
       className="max-h-72 overflow-auto rounded-md border bg-muted p-2 font-mono text-xs whitespace-pre-wrap"
     >
       {sql}
-    </pre>
+    </CodeListing>
   );
 }
 
 function Failure({ error }: { readonly error: ProbeFailure }) {
   return (
-    <p data-testid="cell-drawer-error" className="rounded-md border bg-muted p-2 text-xs">
-      <span className="font-mono font-semibold">
-        {error.sqlState === null ? "engine error" : `SQLSTATE ${error.sqlState}`}
-      </span>
-      <span className="font-mono"> {error.message}</span>
-    </p>
+    <div data-testid="cell-drawer-error" className="flex flex-col gap-2">
+      <p className="rounded-md border bg-muted p-2 text-xs">
+        <span className="font-mono font-semibold">
+          {error.sqlState === null ? "engine error" : `SQLSTATE ${error.sqlState}`}
+        </span>
+        <span className="font-mono"> {error.message}</span>
+      </p>
+      {error.statement === undefined ? null : (
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center justify-between gap-2">
+            <h4 className="text-xs font-medium">The statement that failed</h4>
+            <CopyButton text={error.statement} label="Copy the statement that failed" />
+          </div>
+          <SqlBlock
+            sql={error.statement}
+            label="The statement that failed"
+            testId="cell-drawer-error-statement"
+          />
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -90,6 +105,8 @@ function KeyList({
   readonly list: KeyListView;
   readonly testId: string;
 }) {
+  // A list of many keys scrolls inside its box; a short one is static text and takes no tab stop.
+  const { ref, tabIndex } = useScrollTabStop();
   return (
     <div data-testid={testId} data-count={list.total} className="flex min-w-0 flex-col gap-1">
       <div className="flex items-center justify-between gap-2">
@@ -104,8 +121,10 @@ function KeyList({
         <p className="text-xs text-muted-foreground">none</p>
       ) : (
         <ul
-          tabIndex={0}
+          ref={ref}
+          tabIndex={tabIndex}
           aria-label={`${title} keys`}
+          data-slot="scroll-region"
           className="max-h-40 overflow-auto rounded-md border bg-muted p-2 font-mono text-xs"
         >
           {list.shown.map((key, index) => (
@@ -134,7 +153,11 @@ function SubProbe({ view }: { readonly view: SubProbeView }) {
       className="flex flex-col gap-2 rounded-md border p-2"
     >
       <div className="flex flex-wrap items-center gap-2">
-        <StatusBadge status={probe.status} size="sm" />
+        <StatusBadge
+          status={probe.status}
+          size="sm"
+          timedOutLabel={view.timedOut ? TIMED_OUT_LABEL : undefined}
+        />
         <span className="text-sm font-medium">{view.title}</span>
       </div>
       <p className="text-xs text-muted-foreground">
@@ -205,19 +228,27 @@ function CellDetails({
   const keys = useMemo(() => buildCellKeyLists(cell), [cell]);
   const subProbes = useMemo(() => buildSubProbeViews(cell), [cell]);
   const transcript = useMemo(() => cellTranscript(cell), [cell]);
+  const statusView = useMemo(() => cellStatusView(cell), [cell]);
   return (
     <div className="flex flex-col gap-5 px-4 pb-4">
       <Section title="Status">
         <div className="flex flex-wrap items-center gap-2">
-          <span data-testid="cell-drawer-status" data-status={cell.status}>
-            <StatusBadge status={cell.status} />
+          <span
+            data-testid="cell-drawer-status"
+            data-status={cell.status}
+            data-timed-out={statusView.timedOut}
+          >
+            <StatusBadge
+              status={cell.status}
+              timedOutLabel={statusView.timedOut ? statusView.label : undefined}
+            />
           </span>
           <span className="text-sm">
             expected scope <span className="font-mono">{cell.scope}</span>
             {cell.expectationSource === "default" ? " (a default, not set by you)" : ""}
           </span>
         </div>
-        <p className="text-sm">{statusMeta(cell.status).meaning}</p>
+        <p className="text-sm">{statusView.meaning}</p>
         {cell.reason === null ? null : (
           <p data-testid="cell-drawer-reason" className="text-sm font-medium">
             {cell.reason}

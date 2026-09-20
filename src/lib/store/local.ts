@@ -47,9 +47,9 @@ export type LocalStorageLike = Pick<Storage, "getItem" | "setItem" | "removeItem
 
 export interface LocalStoreOptions {
   /** Told about every unreadable entry, as it is found. */
-  onProblem?: ((problem: StoreProblem) => void) | undefined;
-  now?: (() => Date) | undefined;
-  fillRandom?: FillRandom | undefined;
+  onProblem?: (problem: StoreProblem) => void;
+  now?: () => Date;
+  fillRandom?: FillRandom;
 }
 
 export interface LocalScenarioStore extends ScenarioStore {
@@ -295,7 +295,8 @@ export function createLocalScenarioStore(
       const entries = readIndex()
         .map((id) => readEntry(id, true))
         .filter((entry) => entry !== undefined);
-      return entries.sort(byNewest).map(toSummary);
+      entries.sort(byNewest);
+      return entries.map(toSummary);
     },
 
     get: async (id) => get(id),

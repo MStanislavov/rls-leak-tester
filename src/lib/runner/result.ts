@@ -28,6 +28,12 @@ export type Verdict = (typeof VERDICTS)[number];
 export interface ProbeFailure {
   readonly sqlState: string | null;
   readonly message: string;
+  /**
+   * The statement that failed, when it is not the probe the cell or sub-probe already shows in
+   * `statement` / `sql`: the wrapped `expectedRowsSql` of a custom scope, literals inlined (the
+   * text as the user wrote it when no query could be built from it). Absent otherwise.
+   */
+  readonly statement?: string;
 }
 
 export const SUB_PROBE_KINDS = [

@@ -18,7 +18,7 @@ export interface ReadThroughOptions<T> {
   /** Fills the cache after a miss. */
   readonly store: (value: T) => Promise<void>;
   /** Told about a cache that is down, for a log line. The request goes on. */
-  readonly onUnavailable?: ((error: RedisUnavailableError) => void) | undefined;
+  readonly onUnavailable?: (error: RedisUnavailableError) => void;
 }
 
 export async function readThrough<T>(options: ReadThroughOptions<T>): Promise<T | undefined> {

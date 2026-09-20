@@ -21,6 +21,8 @@ import { tenantScenario } from "../runner/fixtures";
 import {
   COLUMN_GRANTS,
   ESCAPES_AND_INSERTS,
+  HOSTILE_TEXT,
+  HOSTILE_TEXT_LEAKY,
   REACH_SHAPES,
   SESSION_STATE,
   SUPABASE_BLIND,
@@ -100,6 +102,9 @@ async function main(): Promise<void> {
     tenantScenario("fixed"),
     SESSION_STATE,
     COLUMN_GRANTS,
+    // Quoted names with a space and a quote: green, and with failing cells whose ids hold both.
+    HOSTILE_TEXT,
+    HOSTILE_TEXT_LEAKY,
   ];
   for (const scenario of scenarios) {
     await write(directory, scenario);

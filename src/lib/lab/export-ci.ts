@@ -78,10 +78,9 @@ export const CI_EXPORT_COVERAGE_NOTE =
   "It covers the tables, personas and seed rows of this run. A table added to an exposed schema later, or a changed seed, makes it fail at its preflight until you run the matrix and export again.";
 
 function outcomeOf(failing: number, checked: number, skipped: number, warnings: number): string {
+  const verb = skipped === 1 ? "is" : "are";
   const skippedNote =
-    skipped === 0
-      ? ""
-      : ` ${cells(skipped)} could not be probed and ${skipped === 1 ? "is" : "are"} listed as a comment.`;
+    skipped === 0 ? "" : ` ${cells(skipped)} could not be probed and ${verb} listed as a comment.`;
   if (warnings > 0) {
     return `As it is, the workflow stops at its preflight on every run and proves nothing: see the warning above.${skippedNote} ${CI_EXPORT_COVERAGE_NOTE}`;
   }

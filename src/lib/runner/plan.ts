@@ -534,8 +534,9 @@ export function planFreshKey(
       };
     }
   }
+  const named = candidates.map((name) => `"${name}"`).join(", ");
   return skipped(
-    `No fresh value can be made for the primary key (${candidates.map((name) => `"${name}"`).join(", ")}): it is neither uuid nor integer and has no default.`,
+    `No fresh value can be made for the primary key (${named}): it is neither uuid nor integer and has no default.`,
   );
 }
 

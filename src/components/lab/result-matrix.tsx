@@ -8,7 +8,7 @@
  */
 import { Lock, LockOpen, ShieldOff } from "lucide-react";
 import { useState, type KeyboardEvent } from "react";
-import { STATUS_CLASSES, STATUS_ICONS } from "@/components/site/status-badge";
+import { STATUS_CLASSES, STATUS_ICONS, TIMED_OUT_ICON } from "@/components/site/status-badge";
 import {
   firstCell,
   isGridKey,
@@ -18,7 +18,6 @@ import {
   type MatrixTableView,
   type MatrixView,
 } from "@/lib/lab";
-import { statusMeta } from "@/lib/site/status";
 import { cn } from "@/lib/utils";
 
 interface ResultMatrixProps {
@@ -49,7 +48,7 @@ function cellTone(cell: MatrixCellView): string {
 }
 
 function CellContent({ cell }: { readonly cell: MatrixCellView }) {
-  const Icon = STATUS_ICONS[cell.status];
+  const Icon = cell.timedOut ? TIMED_OUT_ICON : STATUS_ICONS[cell.status];
   const notes = [
     cell.leakedCount > 0 ? `${cell.leakedCount} leaked` : "",
     cell.missingCount > 0 ? `${cell.missingCount} missing` : "",
@@ -58,7 +57,7 @@ function CellContent({ cell }: { readonly cell: MatrixCellView }) {
     <>
       <span className="flex items-center gap-1.5 font-medium">
         <Icon aria-hidden="true" className="size-4 shrink-0" />
-        {statusMeta(cell.status).label}
+        {cell.label}
       </span>
       <span className="block font-mono text-[0.7rem] leading-4">
         <span className="sr-only">, expected scope </span>
@@ -68,6 +67,13 @@ function CellContent({ cell }: { readonly cell: MatrixCellView }) {
       </span>
     </>
   );
+}
+
+function rlsText(table: MatrixTableView): string {
+  if (!table.rlsEnabled) {
+    return "RLS disabled";
+  }
+  return table.rlsForced ? "RLS forced" : "RLS enabled";
 }
 
 function TableHeading({
@@ -89,7 +95,7 @@ function TableHeading({
           <span className="font-mono text-sm font-semibold">{table.key}</span>
           <span className="inline-flex items-center gap-1">
             <RlsIcon aria-hidden="true" className="size-3.5" />
-            {table.rlsEnabled ? (table.rlsForced ? "RLS forced" : "RLS enabled") : "RLS disabled"}
+            {rlsText(table)}
           </span>
           <span>
             {table.rowCount === null ? "rows not tracked" : `${table.rowCount} seeded rows`}
@@ -234,6 +240,7 @@ export function ResultMatrix({
                       data-testid="matrix-cell"
                       data-cell-id={cell.id}
                       data-status={cell.status}
+                      data-timed-out={cell.timedOut}
                       data-persona={row.personaId}
                       data-schema={table.schema}
                       data-table={table.name}

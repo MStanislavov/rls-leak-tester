@@ -1,6 +1,7 @@
 "use client";
 
 import { CircleX, Hourglass, TextCursorInput } from "lucide-react";
+import { CodeListing } from "@/components/site/scroll-region";
 import { Button } from "@/components/ui/button";
 import type { SetupErrorView } from "@/lib/lab";
 
@@ -68,15 +69,13 @@ export function SetupErrorPanel({ error, onShowInEditor }: SetupErrorPanelProps)
         <p className="text-xs font-medium text-foreground">
           Statement starting at line {error.statementLine}
         </p>
-        <pre
-          tabIndex={0}
-          role="group"
-          aria-label="The statement that failed"
-          data-testid="setup-error-statement"
+        <CodeListing
+          label="The statement that failed"
+          testId="setup-error-statement"
           className="max-h-48 overflow-auto rounded-md border bg-background p-2 font-mono text-xs whitespace-pre-wrap text-foreground"
         >
           {error.statement}
-        </pre>
+        </CodeListing>
       </div>
       {error.editor === null ? null : (
         <div>

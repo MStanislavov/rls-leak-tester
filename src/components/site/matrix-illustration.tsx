@@ -1,5 +1,6 @@
 import type { CellStatus } from "@/lib/runner";
 import { OPERATIONS } from "@/lib/scenario";
+import { ScrollSection } from "./scroll-region";
 import { StatusBadge, VerdictBadge } from "./status-badge";
 
 interface IllustrationRow {
@@ -27,12 +28,7 @@ export function MatrixIllustration() {
         </p>
         <VerdictBadge verdict="LEAKING" />
       </div>
-      <div
-        role="region"
-        aria-label="Example result matrix"
-        tabIndex={0}
-        className="overflow-x-auto px-2 py-2"
-      >
+      <ScrollSection label="Example result matrix" className="overflow-x-auto px-2 py-2">
         <table className="w-full border-separate border-spacing-1.5 text-left text-sm">
           <thead>
             <tr>
@@ -66,7 +62,7 @@ export function MatrixIllustration() {
             ))}
           </tbody>
         </table>
-      </div>
+      </ScrollSection>
       <figcaption className="border-t px-4 py-3 text-xs text-muted-foreground">
         Illustration, not a live result. 1 leak and 2 escapes make the verdict LEAKING; the
         overblock, the inconclusive and the skipped cell are reported beside it and do not change

@@ -1,4 +1,4 @@
-# ADR (draft): the lab workbench
+# ADR: the lab workbench
 
 - Status: proposed (draft, numbered by the orchestrator)
 - Date: 2026-09-20

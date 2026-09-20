@@ -72,9 +72,9 @@ const DISABLED: AuthClient = {
 };
 
 export interface AuthClientOptions {
-  factory?: BrowserClientFactory | undefined;
+  factory?: BrowserClientFactory;
   /** The origin the callback URL is built on when `NEXT_PUBLIC_SITE_URL` is unset. */
-  currentOrigin?: (() => string) | undefined;
+  currentOrigin?: () => string;
 }
 
 export function createAuthClient(

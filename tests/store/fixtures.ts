@@ -9,7 +9,8 @@ import { randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { vi } from "vitest";
 
-import { createRedisServices, type RedisServices } from "@/lib/redis";
+import { createRedisServices, type Clock, type RedisServices } from "@/lib/redis";
+import { createMemoryAdapters } from "@/lib/redis/adapters/memory";
 import { parseScenario, type Scenario } from "@/lib/scenario";
 import type { ScenarioApiDeps, ScenarioLogEvent } from "@/lib/store/server";
 
@@ -113,6 +114,11 @@ export interface FakeSupabase {
   failWith: { code: string; message: string } | null;
   /** Unique violations to simulate on the next inserts, whatever the slug. */
   slugCollisions: number;
+  /**
+   * Called after a statement ran and before its answer is delivered: a test holds an answer
+   * back here to let another request overtake it.
+   */
+  beforeAnswer: ((statement: string) => Promise<void> | undefined) | null;
   readonly exchangeCodeForSession: ReturnType<typeof vi.fn>;
   readonly signOut: ReturnType<typeof vi.fn>;
   seed(row: Partial<FakeRow> & Pick<FakeRow, "slug" | "owner" | "visibility">): FakeRow;
@@ -134,6 +140,7 @@ export function createFakeSupabase(): FakeSupabase {
     authOutage: false,
     failWith: null,
     slugCollisions: 0,
+    beforeAnswer: null,
     exchangeCodeForSession: vi.fn(async () => ({ data: {}, error: null })),
     signOut: vi.fn(async () => ({ error: null })),
     seed: (row) => {
@@ -153,12 +160,19 @@ export function createFakeSupabase(): FakeSupabase {
   /** The SELECT policies: own rows and public rows. */
   const visible = (row: FakeRow): boolean => row.owner === fake.user || row.visibility === "public";
 
-  const project = (row: FakeRow, columns: string): Record<string, unknown> =>
+  /** What `get_scenario_by_slug` returns: explicit columns and `is_owner`, never the owner id. */
+  const FUNCTION_COLUMNS = ["id", "slug", "title", "payload", "visibility", "updated_at"];
+
+  const columnsOf = (list: string): string[] => list.split(",").map((column) => column.trim());
+
+  const project = (row: FakeRow, columns: string, fromFunction: boolean): Record<string, unknown> =>
     Object.fromEntries(
-      columns
-        .split(",")
-        .map((column) => column.trim())
-        .map((column) => [column, (row as unknown as Record<string, unknown>)[column]]),
+      columnsOf(columns).map((column) => [
+        column,
+        fromFunction && column === "is_owner"
+          ? row.owner === fake.user
+          : (row as unknown as Record<string, unknown>)[column],
+      ]),
     );
 
   const run = (
@@ -182,13 +196,23 @@ export function createFakeSupabase(): FakeSupabase {
         result = fake.rows.filter((row) => visible(row) && matches(row));
         result.sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1));
         break;
-      case "rpc":
+      case "rpc": {
+        const unknown = columnsOf(columns ?? "id").find(
+          (column) => column !== "is_owner" && !FUNCTION_COLUMNS.includes(column),
+        );
+        if (unknown !== undefined) {
+          return {
+            data: null,
+            error: { code: "42703", message: `column ${unknown} does not exist` },
+          };
+        }
         result = fake.rows.filter(
           (row) =>
             row.slug === operation.args["p_slug"] &&
             (row.visibility !== "private" || row.owner === fake.user),
         );
         break;
+      }
       case "insert": {
         if (fake.user === null) {
           return { data: null, error: { code: "42501", message: "permission denied" } };
@@ -224,7 +248,8 @@ export function createFakeSupabase(): FakeSupabase {
     }
 
     const limited = max === undefined ? result : result.slice(0, max);
-    return { data: limited.map((row) => project(row, columns ?? "id")), error: null };
+    const fromFunction = operation.kind === "rpc";
+    return { data: limited.map((row) => project(row, columns ?? "id", fromFunction)), error: null };
   };
 
   const query = (operation: Operation) => {
@@ -248,7 +273,13 @@ export function createFakeSupabase(): FakeSupabase {
       then: <A, B>(
         resolve: (value: QueryResult) => A | PromiseLike<A>,
         reject?: (reason: unknown) => B | PromiseLike<B>,
-      ) => Promise.resolve(run(operation, filters, columns, max)).then(resolve, reject),
+      ) => {
+        const answer = run(operation, filters, columns, max);
+        const held = fake.beforeAnswer?.(fake.statements.at(-1) ?? "");
+        return Promise.resolve(held)
+          .then(() => answer)
+          .then(resolve, reject);
+      },
     };
     return builder;
   };
@@ -288,13 +319,25 @@ export interface ApiHarness {
   readonly deps: ScenarioApiDeps;
 }
 
-/** In-memory Redis services under a unique env, the fake Supabase, a collecting logger. */
-export function createApiHarness(options: { configured?: boolean } = {}): ApiHarness {
+/**
+ * In-memory Redis services under a unique env, the fake Supabase, a collecting logger. With a
+ * `clock` the cache expires by that clock, so a test can let a TTL pass.
+ */
+export function createApiHarness(
+  options: { configured?: boolean; clock?: Clock } = {},
+): ApiHarness {
   const supabase = createFakeSupabase();
-  const services = createRedisServices({
+  const base = createRedisServices({
     envName: `test-${randomUUID().slice(0, 12)}`,
     redisUrl: undefined,
   });
+  const services: RedisServices =
+    options.clock === undefined
+      ? base
+      : {
+          ...base,
+          cache: createMemoryAdapters({ keyPrefix: base.keys.prefix, clock: options.clock }).cache,
+        };
   const events: ScenarioLogEvent[] = [];
   return {
     supabase,

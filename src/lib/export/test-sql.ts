@@ -70,6 +70,12 @@ const INDENT = "    ";
 
 type Argument = readonly [name: string, value: string];
 
+/** `do $rls$ ... $rls$;`: an anonymous block around `body`, which starts at `declare` or `begin`. */
+function anonymousBlock(body: string): string {
+  const quoted = dollarQuote(`\n${body}\n`, "rls");
+  return `do ${quoted};`;
+}
+
 /**
  * A `DO` block that calls the runtime with named arguments. `guard`, for a cell: the block ends
  * before the call when the preflight found other rows in the cell's table than the exported ones.
@@ -84,8 +90,9 @@ function doBlock(
     guard === undefined
       ? ""
       : `  if not ${runtimeName("ready")}(${quoteLiteral(guard.table)}, ${quoteLiteral(guard.cell)}) then\n    return;\n  end if;\n`;
-  const call = `\nbegin\n${ready}  perform ${runtimeName(name)}(\n${lines.join(",\n")}\n  );\nend\n`;
-  return `do ${dollarQuote(call, "rls")};`;
+  return anonymousBlock(
+    `begin\n${ready}  perform ${runtimeName(name)}(\n${lines.join(",\n")}\n  );\nend`,
+  );
 }
 
 const text = (value: string): string => quoteLiteral(value);
@@ -216,8 +223,10 @@ function headerSection(input: TestSqlInput, checked: number): string {
     `${checked} of ${input.plans.length} cells (persona x table x operation) are checked below; the others are`,
     "comments that say why they cannot be. Every cell switches to the persona's role and claims,",
     "runs the probe statements of the matrix runner, compares the reached keys with the expected",
-    "keys, and rolls everything back: the database is unchanged afterwards. A cell that fails is",
-    "reported as a WARNING at once; the last statement raises one exception that lists them all.",
+    "keys, and rolls everything back: rows, roles and settings are as before. What a rollback does",
+    "not take back is a sequence: a probe INSERT that draws its key from one (serial, a nextval()",
+    "default, GENERATED ALWAYS AS IDENTITY) advances it, so later keys have gaps. A cell that fails",
+    "is reported as a WARNING at once; the last statement raises one exception that lists them all.",
     `An inconclusive cell (a probe failed for a reason that is not authorization) ${input.inconclusive === "fail" ? "fails the run" : "is a warning"}.`,
     "",
     "Run it as a superuser, after the schema and the seed of the scenario have been loaded:",
@@ -241,7 +250,9 @@ function sessionSection(): string {
     "-- The session as the matrix runner pins it, and English messages: a 42501 is read by its text.",
     ...RESET_SESSION.map((line) => `${line};`),
     "set lc_messages = 'C';",
-    `do ${dollarQuote(`\nbegin\n  perform set_config(${quoteLiteral(REPORT_SETTING)}, ${quoteLiteral(report)}, false);\nend\n`, "rls")};`,
+    anonymousBlock(
+      `begin\n  perform set_config(${quoteLiteral(REPORT_SETTING)}, ${quoteLiteral(report)}, false);\nend`,
+    ),
   ].join("\n");
 }
 
@@ -273,7 +284,7 @@ function preflightSection(input: TestSqlInput): string {
 }
 
 function verdictSection(input: TestSqlInput, checked: number): string {
-  const body = `declare
+  const body = String.raw`declare
   v_tool constant text := ${quoteLiteral(input.toolName)};
   v_checked constant integer := ${checked};
   v_report jsonb := current_setting(${quoteLiteral(REPORT_SETTING)})::jsonb;
@@ -282,30 +293,50 @@ function verdictSection(input: TestSqlInput, checked: number): string {
   v_setup integer := jsonb_array_length(v_report -> 'setup');
   v_passed integer := (v_report ->> 'passed')::integer;
   v_not_run integer := (v_report ->> 'not_run')::integer;
+  v_leaking integer;
+  v_overblock integer;
+  v_inconclusive integer;
+  v_unproven integer;
   v_lines text;
 begin
-  select string_agg(line, E'\\n' order by position) into v_lines
+  select string_agg(line, E'\n' order by position) into v_lines
     from jsonb_array_elements_text((v_report -> 'setup') || (v_report -> 'failed') || (v_report -> 'warned')) with ordinality as listed(line, position);
+  -- Every line of a cell starts with its status. Only a leak or an escape is called LEAKING; an
+  -- overblock, an inconclusive cell and a setup problem fail the run under their own names.
+  select count(*) filter (where line like '[leak] %' or line like '[escape] %'),
+         count(*) filter (where line like '[overblock] %'),
+         count(*) filter (where line like '[inconclusive] %')
+    into v_leaking, v_overblock, v_inconclusive
+    from jsonb_array_elements_text((v_report -> 'failed') || (v_report -> 'warned')) as listed(line);
+  select count(*) into v_unproven
+    from jsonb_array_elements_text(v_report -> 'failed') as listed(line)
+   where line like '[inconclusive] %';
   if v_failed > 0 or v_setup > 0 then
     raise exception using message = format(
-      E'%s: LEAKING or not proven. %s of %s checked cells failed, %s passed, %s warnings.%s\\n%s',
-      v_tool, v_failed, v_checked, v_passed, v_warned,
+      E'%s: %s. Of %s checked cells: %s leaked or escaped, %s overblocked, %s inconclusive, %s passed; %s warnings.%s\n%s',
+      v_tool,
+      case
+        when v_leaking > 0 then 'LEAKING'
+        when v_setup > 0 or v_unproven > 0 then 'NOT PROVEN, no leak or escape was measured'
+        else 'OVERBLOCKING, no leak or escape was measured'
+      end,
+      v_checked, v_leaking, v_overblock, v_inconclusive, v_passed, v_warned,
       case when v_setup > 0 then format(' Setup problems: %s; cells not run because of them: %s.', v_setup, v_not_run) else '' end,
       v_lines);
   end if;
   if v_passed = 0 then
     raise exception using message = format(
       '%s: NOT PROVEN. No cell was measured, so nothing is known about isolation.%s',
-      v_tool, coalesce(E'\\n' || v_lines, ''));
+      v_tool, coalesce(E'\n' || v_lines, ''));
   end if;
   raise notice '%', format(
     '%s: ISOLATED. %s of %s checked cells passed, %s warnings.%s',
-    v_tool, v_passed, v_checked, v_warned, coalesce(E'\\n' || v_lines, ''));
+    v_tool, v_passed, v_checked, v_warned, coalesce(E'\n' || v_lines, ''));
 end`;
   return [
     "-- Verdict. The runtime goes first, so that nothing of this file is left in the session.",
     dropRuntimeSql(),
-    `do ${dollarQuote(`\n${body}\n`, "rls")};`,
+    anonymousBlock(body),
   ].join("\n");
 }
 

@@ -11,6 +11,7 @@ import {
   isDatabaseLost,
   isRowSecurityViolation,
   isStatementDenial,
+  isTimeoutFailure,
   outcomeOfFailure,
   sortKeys,
   toProbeFailure,
@@ -255,5 +256,19 @@ describe("verdict", () => {
 
   it("ranks every status exactly once", () => {
     expect([...STATUS_SEVERITY].sort()).toEqual([...CELL_STATUSES].sort());
+  });
+});
+
+describe("isTimeoutFailure", () => {
+  it("recognises what a statement timeout becomes in a result, whatever the limit", () => {
+    expect(isTimeoutFailure(toProbeFailure(new EngineTimeoutError(5000)))).toBe(true);
+    expect(isTimeoutFailure(toProbeFailure(new EngineTimeoutError(250)))).toBe(true);
+  });
+
+  it("is not fooled by user SQL that raises the same words: Postgres always has a SQLSTATE", () => {
+    const { message } = new EngineTimeoutError(5000);
+    expect(isTimeoutFailure(toProbeFailure(new SqlError({ code: "P0001", message })))).toBe(false);
+    expect(isTimeoutFailure({ sqlState: null, message: `x ${message}` })).toBe(false);
+    expect(isTimeoutFailure(toProbeFailure(new EngineTerminatedError("gone")))).toBe(false);
   });
 });

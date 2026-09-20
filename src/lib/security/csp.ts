@@ -67,7 +67,7 @@ export function generateNonce(): string {
   crypto.getRandomValues(bytes);
   let binary = "";
   for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
+    binary += String.fromCodePoint(byte);
   }
   return btoa(binary);
 }

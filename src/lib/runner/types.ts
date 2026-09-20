@@ -62,10 +62,10 @@ export interface SqlEngine extends SqlExecutor {
 export interface SqlErrorFields {
   readonly code: string;
   readonly message: string;
-  readonly detail?: string | undefined;
-  readonly hint?: string | undefined;
+  readonly detail?: string;
+  readonly hint?: string;
   /** 1-based character offset into the statement, when Postgres reports one. */
-  readonly position?: number | undefined;
+  readonly position?: number;
 }
 
 /** Postgres raised an error. `code` is the SQLSTATE (`42501`, `23505`, ...). */
@@ -91,6 +91,14 @@ export class EngineError extends Error {
   /** `true` when the database is gone and setup has to be replayed. */
   readonly databaseLost: boolean = false;
 }
+
+/**
+ * The message of `EngineTimeoutError`. A result keeps only SQLSTATE and message of a failure, so
+ * this text is how a timed-out probe is recognised afterwards (`isTimeoutFailure`), also in a
+ * result that was stored or shared.
+ */
+export const ENGINE_TIMEOUT_MESSAGE =
+  /^The database did not answer within \d+ ms and was terminated$/;
 
 /** A call exceeded its timeout. The worker was terminated: the database is empty now. */
 export class EngineTimeoutError extends EngineError {

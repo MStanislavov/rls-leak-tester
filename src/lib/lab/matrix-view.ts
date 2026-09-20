@@ -8,6 +8,7 @@
 import type { Finding } from "@/lib/checks";
 import { CELL_STATUSES, type CellResult, type CellStatus, type MatrixResult } from "@/lib/runner";
 import { OPERATIONS, type Operation } from "@/lib/scenario";
+import { cellStatusView, cellTimeout } from "./cell-view";
 
 /** The key of a table everywhere in the lab: the same spelling the runner's cell ids use. */
 export function tableKey(schema: string, name: string): string {
@@ -20,6 +21,11 @@ export interface MatrixCellView {
   readonly status: CellStatus;
   readonly scope: CellResult["scope"];
   readonly expectationSource: CellResult["expectationSource"];
+  /** A probe of the cell ran into the statement timeout; `label` says so. */
+  readonly timedOut: boolean;
+  /** The word next to the icon: the status label, or "Timed out". */
+  readonly label: string;
+  /** Both are 0 when the reach probe timed out: nothing was measured, so nothing is "missing". */
   readonly leakedCount: number;
   readonly missingCount: number;
   /** `false` when a status filter is active and this cell is not part of it (shown dimmed). */
@@ -73,14 +79,18 @@ export function findingTableKey(finding: Pick<Finding, "object">): string | null
 }
 
 function toCellView(cell: CellResult, filter: readonly CellStatus[]): MatrixCellView {
+  const { timedOut, label } = cellStatusView(cell);
+  const measured = cellTimeout(cell) !== "reach";
   return {
     id: cell.id,
     operation: cell.operation,
     status: cell.status,
     scope: cell.scope,
     expectationSource: cell.expectationSource,
-    leakedCount: cell.leakedKeys.length,
-    missingCount: cell.missingKeys.length,
+    timedOut,
+    label,
+    leakedCount: measured ? cell.leakedKeys.length : 0,
+    missingCount: measured ? cell.missingKeys.length : 0,
     matchesFilter: filter.length === 0 || filter.includes(cell.status),
   };
 }

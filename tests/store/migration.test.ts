@@ -193,6 +193,42 @@ describe.each([
         });
       });
 
+      it("returns explicit columns and never the owner's user id", async () => {
+        for (const persona of [anon, bob, alice]) {
+          const columns = await as(persona, async (tx) => {
+            const result = await tx.query("select * from public.get_scenario_by_slug($1)", [
+              "alice-unlisted",
+            ]);
+            return result.fields.map((field) => field.name);
+          });
+          expect(columns).toEqual({
+            ok: true,
+            value: ["id", "slug", "title", "payload", "visibility", "updated_at", "is_owner"],
+          });
+        }
+        const owner = await as(anon, async (tx) => {
+          await tx.query("select owner from public.get_scenario_by_slug('alice-unlisted')");
+        });
+        expect(owner).toEqual({ ok: false, code: "42703" });
+      });
+
+      it("tells the caller whether the row is theirs: is_owner, never null", async () => {
+        const isOwner = (persona: Persona, slug: string) =>
+          as(persona, async (tx) => {
+            const result = await tx.query<{ is_owner: boolean | null }>(
+              "select is_owner from public.get_scenario_by_slug($1)",
+              [slug],
+            );
+            return result.rows.map((row) => row.is_owner);
+          });
+
+        expect(await isOwner(anon, "alice-unlisted")).toEqual({ ok: true, value: [false] });
+        expect(await isOwner(bob, "alice-unlisted")).toEqual({ ok: true, value: [false] });
+        expect(await isOwner(alice, "alice-unlisted")).toEqual({ ok: true, value: [true] });
+        expect(await isOwner(alice, "alice-private")).toEqual({ ok: true, value: [true] });
+        expect(await isOwner(alice, "bob-public")).toEqual({ ok: true, value: [false] });
+      });
+
       it("is SECURITY DEFINER with a pinned, empty search_path", async () => {
         const result = await db.query<{ prosecdef: boolean; proconfig: string[] }>(
           "select prosecdef, proconfig from pg_proc where oid = 'public.get_scenario_by_slug(text)'::regprocedure",
@@ -302,6 +338,31 @@ describe.each([
         ]) {
           expect(await affected(anon, sql)).toEqual({ ok: false, code: "42501" });
         }
+      });
+
+      it("sets created_at and updated_at on the server when a row is inserted", async () => {
+        const inserted = await as(alice, async (tx) => {
+          const result = await tx.query<{ created: boolean; updated: boolean }>(
+            `insert into public.scenarios (slug, title, payload, created_at, updated_at)
+           values ('alice-forged', 'Forged', '{}', '2001-01-01T00:00:00Z', '2099-01-01T00:00:00Z')
+           returning created_at = now() as created, updated_at = now() as updated`,
+          );
+          return result.rows[0];
+        });
+        expect(inserted).toEqual({ ok: true, value: { created: true, updated: true } });
+      });
+
+      it("keeps created_at whatever an update sends", async () => {
+        const updated = await as(alice, async (tx) => {
+          const result = await tx.query<{ kept: boolean }>(
+            `with before as (select created_at from public.scenarios where slug = 'alice-public')
+           update public.scenarios set created_at = '2001-01-01T00:00:00Z'
+           where slug = 'alice-public'
+           returning created_at = (select created_at from before) as kept`,
+          );
+          return result.rows[0]?.kept;
+        });
+        expect(updated).toEqual({ ok: true, value: true });
       });
 
       it("sets updated_at on the server, whatever the client sends", async () => {

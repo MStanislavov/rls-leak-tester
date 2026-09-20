@@ -14,6 +14,7 @@
 import { Info, Sparkles, TriangleAlert } from "lucide-react";
 import { useCallback, useEffect, useMemo, useReducer, useRef, type ReactNode } from "react";
 import { toast } from "sonner";
+import { CodeListing } from "@/components/site/scroll-region";
 import { Button } from "@/components/ui/button";
 import { buildExplainRequest, type BuildExplainRequestResult } from "@/lib/ai/build-request";
 import type { ExplainClientResult } from "@/lib/ai/client";
@@ -100,15 +101,13 @@ function PayloadDetails({ json, bytes }: { readonly json: string; readonly bytes
           static findings on the table. Your seed data, your schema text and the probe scripts stay
           here. Server logs record a hash and sizes, never SQL or claims.
         </p>
-        <pre
-          tabIndex={0}
-          role="group"
-          aria-label="The request that will be sent"
-          data-testid="explain-payload-json"
+        <CodeListing
+          label="The request that will be sent"
+          testId="explain-payload-json"
           className="max-h-48 overflow-auto rounded-md border bg-muted p-2 font-mono whitespace-pre-wrap"
         >
           {json}
-        </pre>
+        </CodeListing>
       </div>
     </details>
   );
@@ -174,15 +173,13 @@ function ProposedSql({
           </span>
         )}
       </div>
-      <pre
-        tabIndex={0}
-        role="group"
-        aria-label="Proposed policy SQL, read-only"
-        data-testid="explain-sql"
+      <CodeListing
+        label="Proposed policy SQL, read-only"
+        testId="explain-sql"
         className="max-h-48 overflow-auto rounded-md border bg-muted p-2 font-mono text-xs whitespace-pre-wrap"
       >
         {sql}
-      </pre>
+      </CodeListing>
       {unexpected.length === 0 ? null : (
         <p data-testid="explain-unexpected-sql" className="text-xs">
           <TriangleAlert aria-hidden="true" className="mr-1 inline size-3.5" />

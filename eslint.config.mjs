@@ -47,7 +47,7 @@ const PURE_DIRS = ["runner", "checks", "export", "scenario"].map(
 const RELATIVE_APP_LAYER = String.raw`^(?:\.\./)+(?:app|components)(?:/|$)`;
 // The parts of src/lib that reach the network or the environment: Redis, the
 // model, the store, and every config module except the pure parser env.ts.
-const ALIAS_IMPURE_LIB = String.raw`^@/lib/(?:redis|ai|store)(?:/|$)`;
+const ALIAS_IMPURE_LIB = "^@/lib/(?:redis|ai|store)(?:/|$)";
 const RELATIVE_IMPURE_LIB = String.raw`^(?:\.\./)+(?:redis|ai|store)(?:/|$)`;
 const ALIAS_CONFIG_READER = String.raw`^@/lib/config(?:$|/(?!env(?:\.[cm]?[jt]s)?$))`;
 const RELATIVE_CONFIG_READER = String.raw`^(?:\.\./)+config(?:$|/(?!env(?:\.[cm]?[jt]s)?$))`;

@@ -4,8 +4,9 @@
  * `tests/store/migration.test.ts`; here the server's own first line of defence is.
  */
 import { describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 
-import { RATE_LIMITS, RedisUnavailableError } from "@/lib/redis";
+import { RATE_LIMITS, RedisUnavailableError, SCENARIO_CACHE_TTL_SECONDS } from "@/lib/redis";
 import {
   scenarioListResponseSchema,
   scenarioResponseSchema,
@@ -483,10 +484,49 @@ describe("GET /api/scenarios/by-slug/[slug]", () => {
     harness.supabase.user = ALICE;
     const second = await get();
 
-    expect(harness.supabase.statements).toEqual(["rpc:get_scenario_by_slug"]);
+    // The scenario comes from the cache; whose it is comes from a query without the payload.
+    expect(harness.supabase.statements).toEqual(["rpc:get_scenario_by_slug", "select:scenarios"]);
     expect(scenarioResponseSchema.parse(await second.json()).scenario.ownedByMe).toBe(true);
+    harness.supabase.user = BOB;
+    expect(scenarioResponseSchema.parse(await (await get()).json()).scenario.ownedByMe).toBe(false);
     const key = harness.services.keys.scenario("alice-unlisted");
     expect(await harness.services.cache.get(key)).toContain("alice-unlisted");
+  });
+
+  it("never learns the owner id of a shared scenario: not from the function, not in the cache", async () => {
+    const harness = createApiHarness();
+    harness.supabase.seed({ slug: "alice-unlisted", owner: ALICE, visibility: "unlisted" });
+    const get = () =>
+      handleGetScenarioBySlug(jsonRequest("GET", "/"), slug("alice-unlisted"), harness.deps);
+
+    // The fake function has no `owner` column, like the migration: asking for it is 42703.
+    expect((await get()).status).toBe(200);
+    harness.supabase.user = ALICE;
+    const mine = await get();
+
+    expect(scenarioResponseSchema.parse(await mine.json()).scenario.ownedByMe).toBe(true);
+    const cached = await harness.services.cache.get(
+      harness.services.keys.scenario("alice-unlisted"),
+    );
+    // The payload may mention Alice (her persona); the row around it says nothing about her.
+    expect(
+      Object.keys(z.record(z.string(), z.unknown()).parse(JSON.parse(cached ?? ""))).sort(),
+    ).toEqual(["id", "scenario", "slug", "title", "updatedAt", "visibility"]);
+  });
+
+  it("answers ownedByMe from is_owner when the owner is the first reader", async () => {
+    const harness = createApiHarness();
+    harness.supabase.seed({ slug: "alice-unlisted", owner: ALICE, visibility: "unlisted" });
+    harness.supabase.user = ALICE;
+
+    const response = await handleGetScenarioBySlug(
+      jsonRequest("GET", "/"),
+      slug("alice-unlisted"),
+      harness.deps,
+    );
+
+    expect(scenarioResponseSchema.parse(await response.json()).scenario.ownedByMe).toBe(true);
+    expect(harness.supabase.statements).toEqual(["rpc:get_scenario_by_slug"]);
   });
 
   it("never caches a private scenario: the next caller must not get it from the cache", async () => {
@@ -497,9 +537,9 @@ describe("GET /api/scenarios/by-slug/[slug]", () => {
 
     harness.supabase.user = ALICE;
     expect((await get()).status).toBe(200);
-    expect(await harness.services.cache.get(harness.services.keys.scenario("alice-private"))).toBe(
-      undefined,
-    );
+    expect(
+      await harness.services.cache.get(harness.services.keys.scenario("alice-private")),
+    ).toBeUndefined();
 
     harness.supabase.user = BOB;
     expect((await get()).status).toBe(404);
@@ -695,7 +735,8 @@ describe("PATCH and DELETE /api/scenarios/[id]", () => {
   });
 
   it("invalidate the cached slug on every write", async () => {
-    const harness = createApiHarness();
+    let now = Date.parse("2026-09-01T00:00:00.000Z");
+    const harness = createApiHarness({ clock: () => now });
     const row = harness.supabase.seed({
       slug: "alice-shared",
       owner: ALICE,
@@ -726,8 +767,15 @@ describe("PATCH and DELETE /api/scenarios/[id]", () => {
       id(row.id),
       harness.deps,
     );
+    // For one cache TTL after a write nothing is cached under the slug (see the race below).
+    harness.supabase.user = null;
+    expect((await read()).status).toBe(200);
+    expect(await harness.services.cache.get(key)).toBeUndefined();
+    now += SCENARIO_CACHE_TTL_SECONDS * 1000;
     await read();
     expect(await harness.services.cache.get(key)).toBeDefined();
+
+    harness.supabase.user = ALICE;
 
     const deleted = await handleDeleteScenario(
       jsonRequest("DELETE", "/"),
@@ -740,14 +788,92 @@ describe("PATCH and DELETE /api/scenarios/[id]", () => {
     expect((await read()).status).toBe(404);
   });
 
-  it("keep the write when the cache cannot be invalidated", async () => {
+  describe("a read that overlaps the write cannot bring the old row back", () => {
+    const SLUG = "alice-shared";
+    const RPC = "rpc:get_scenario_by_slug";
+
+    function setup() {
+      const harness = createApiHarness();
+      const row = harness.supabase.seed({ slug: SLUG, owner: ALICE, visibility: "unlisted" });
+      const key = harness.services.keys.scenario(SLUG);
+      const read = (deps = harness.deps) =>
+        handleGetScenarioBySlug(jsonRequest("GET", "/"), slug(SLUG), deps);
+      const write = {
+        "switches to private": () =>
+          handleUpdateScenario(
+            jsonRequest("PATCH", "/", { visibility: "private" }),
+            id(row.id),
+            harness.deps,
+          ),
+        deletes: () => handleDeleteScenario(jsonRequest("DELETE", "/"), id(row.id), harness.deps),
+      };
+      return { harness, key, read, write };
+    }
+
+    it.each(["switches to private", "deletes"] as const)(
+      "the reader loaded the row, then the owner %s, then the reader fills the cache",
+      async (change) => {
+        const { harness, key, read, write } = setup();
+        let release = (): void => undefined;
+        const held = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        harness.supabase.beforeAnswer = (statement) => (statement === RPC ? held : undefined);
+
+        const reading = read();
+        await vi.waitFor(() => expect(harness.supabase.statements).toContain(RPC));
+        harness.supabase.beforeAnswer = null;
+        harness.supabase.user = ALICE;
+        expect((await write[change]()).status).toBeLessThan(300);
+        harness.supabase.user = null;
+        release();
+
+        // The overlapping read still answers with what it loaded before the change ...
+        expect((await reading).status).toBe(200);
+        // ... but it leaves nothing behind: the next visitor asks the database and gets 404.
+        expect(await harness.services.cache.get(key)).toBeUndefined();
+        expect((await read()).status).toBe(404);
+      },
+    );
+
+    it.each(["switches to private", "deletes"] as const)(
+      "the owner %s between the reader's last look and its cache write",
+      async (change) => {
+        const { harness, key, read, write } = setup();
+        const { cache } = harness.services;
+        let overtaken = false;
+        const racing = {
+          ...harness.deps,
+          cache: {
+            get: (k: typeof key) => cache.get(k),
+            delete: (k: typeof key) => cache.delete(k),
+            set: async (k: typeof key, value: string, ttl: number) => {
+              if (k === key && !overtaken) {
+                overtaken = true;
+                harness.supabase.user = ALICE;
+                expect((await write[change]()).status).toBeLessThan(300);
+                harness.supabase.user = null;
+              }
+              await cache.set(k, value, ttl);
+            },
+          },
+        };
+
+        expect((await read(racing)).status).toBe(200);
+
+        expect(overtaken).toBe(true);
+        expect(await cache.get(key)).toBeUndefined();
+        expect((await read()).status).toBe(404);
+      },
+    );
+  });
+
+  it("keep the write when the cache cannot be invalidated, and still try every step", async () => {
     const harness = createApiHarness();
     const row = harness.supabase.seed({ slug: "alice-shared", owner: ALICE, visibility: "public" });
     harness.supabase.user = ALICE;
-    const cache = {
-      ...harness.services.cache,
-      delete: vi.fn(() => Promise.reject(new RedisUnavailableError("cache.delete"))),
-    };
+    const down = () => Promise.reject(new RedisUnavailableError("cache"));
+    const cache = { get: vi.fn(down), set: vi.fn(down), delete: vi.fn(down) };
 
     const response = await handleUpdateScenario(
       jsonRequest("PATCH", "/", { visibility: "private" }),
@@ -756,7 +882,12 @@ describe("PATCH and DELETE /api/scenarios/[id]", () => {
     );
 
     expect(response.status).toBe(200);
+    expect(cache.set).toHaveBeenCalledOnce();
     expect(cache.delete).toHaveBeenCalledOnce();
+    // The marker is written before the entry is deleted: the order the proof relies on.
+    expect(cache.set.mock.invocationCallOrder[0]).toBeLessThan(
+      cache.delete.mock.invocationCallOrder[0] ?? 0,
+    );
   });
 });
 

@@ -184,8 +184,61 @@ function initialVerification(explanation: Explanation): VerificationState {
     : { status: "unverified" };
 }
 
-function withVerification(state: ExplainState, verification: VerificationState): ExplainState {
-  return state.phase === "explained" ? { ...state, verification } : state;
+type ExplainedState = ExplainState & { readonly phase: "explained" };
+
+function isExplained(state: ExplainState): state is ExplainedState {
+  return state.phase === "explained";
+}
+
+function isVerifying(state: ExplainState): state is ExplainedState {
+  return isExplained(state) && state.verification.status === "verifying";
+}
+
+/** A re-run may start when none ran yet, or when the last one did not complete. */
+function mayVerify(verification: VerificationState): boolean {
+  return (
+    verification.status === "unverified" ||
+    (verification.status === "settled" && verification.outcome.kind === "incomplete")
+  );
+}
+
+function isVerifiedFix(verification: VerificationState): boolean {
+  return verification.status === "settled" && verification.outcome.kind === "verified";
+}
+
+function withVerification(state: ExplainedState, verification: VerificationState): ExplainState {
+  return { ...state, verification };
+}
+
+function requestFinished(state: ExplainState, result: ExplainClientResult): ExplainState {
+  if (state.phase !== "requesting") {
+    return state;
+  }
+  if (result.ok) {
+    return {
+      phase: "explained",
+      explanation: result.explanation,
+      cached: result.cached,
+      verification: initialVerification(result.explanation),
+    };
+  }
+  return result.code === "aborted"
+    ? INITIAL_EXPLAIN_STATE
+    : { phase: "failed", notice: noticeOfFailure(result) };
+}
+
+function verifyFinished(
+  state: ExplainState,
+  outcome: FixVerification,
+  schemaSql: string | null,
+): ExplainState {
+  return isVerifying(state)
+    ? withVerification(state, {
+        status: "settled",
+        outcome,
+        verifiedSchemaSql: outcome.kind === "verified" ? schemaSql : null,
+      })
+    : state;
 }
 
 export function explainReducer(state: ExplainState, action: ExplainAction): ExplainState {
@@ -196,46 +249,20 @@ export function explainReducer(state: ExplainState, action: ExplainAction): Expl
       return state.phase === "requesting"
         ? { phase: "requesting", partial: action.partial }
         : state;
-    case "request/finished": {
-      if (state.phase !== "requesting") {
-        return state;
-      }
-      const { result } = action;
-      if (result.ok) {
-        return {
-          phase: "explained",
-          explanation: result.explanation,
-          cached: result.cached,
-          verification: initialVerification(result.explanation),
-        };
-      }
-      return result.code === "aborted"
-        ? INITIAL_EXPLAIN_STATE
-        : { phase: "failed", notice: noticeOfFailure(result) };
-    }
+    case "request/finished":
+      return requestFinished(state, action.result);
     case "verify/start":
-      return state.phase === "explained" &&
-        (state.verification.status === "unverified" ||
-          (state.verification.status === "settled" &&
-            state.verification.outcome.kind === "incomplete"))
-        ? { ...state, verification: { status: "verifying", done: 0, total: 0 } }
+      return isExplained(state) && mayVerify(state.verification)
+        ? withVerification(state, { status: "verifying", done: 0, total: 0 })
         : state;
     case "verify/progress":
-      return state.phase === "explained" && state.verification.status === "verifying"
+      return isVerifying(state)
         ? withVerification(state, { status: "verifying", done: action.done, total: action.total })
         : state;
     case "verify/finished":
-      return state.phase === "explained" && state.verification.status === "verifying"
-        ? withVerification(state, {
-            status: "settled",
-            outcome: action.outcome,
-            verifiedSchemaSql: action.outcome.kind === "verified" ? action.schemaSql : null,
-          })
-        : state;
+      return verifyFinished(state, action.outcome, action.schemaSql);
     case "fix/applied":
-      return state.phase === "explained" &&
-        state.verification.status === "settled" &&
-        state.verification.outcome.kind === "verified"
+      return isExplained(state) && isVerifiedFix(state.verification)
         ? withVerification(state, { status: "applied" })
         : state;
     case "reset":

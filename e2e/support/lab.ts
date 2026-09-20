@@ -5,7 +5,8 @@
  *                                 data-dirty, data-origin = template | blank | saved | imported
  *   [data-testid="verdict"]       data-verdict = ISOLATED | LEAKING | NOT PROVEN | none
  *   [data-testid="matrix-cell"]   data-cell-id, data-status, data-persona, data-schema, data-table,
- *                                 data-operation, data-dimmed
+ *                                 data-operation, data-dimmed, data-timed-out (an inconclusive
+ *                                 cell whose probe timed out reads "Timed out")
  *   [data-testid="setup-error"]   data-phase, data-sqlstate, data-line, data-timed-out
  *
  * The panels mounted through `lab-extensions.tsx` name their parts by prefix:

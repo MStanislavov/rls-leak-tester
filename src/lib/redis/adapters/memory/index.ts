@@ -13,9 +13,9 @@ export interface MemoryAdapterOptions {
   /** The prefix of the key builder; keys outside it are refused. */
   readonly keyPrefix: string;
   /** Defaults to `Date.now`. */
-  readonly clock?: Clock | undefined;
+  readonly clock?: Clock;
   /** Bound of each of the three maps. */
-  readonly maxEntries?: number | undefined;
+  readonly maxEntries?: number;
 }
 
 export interface MemoryAdapters {

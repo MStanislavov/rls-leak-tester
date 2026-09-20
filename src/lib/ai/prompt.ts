@@ -36,8 +36,8 @@ In "keys", "total" is the number of primary keys the engine saw and "sample" hol
 
 Write plain text without Markdown. Keep "explanation" under 600 words and "rootCause" to one or two sentences. If the information given is not enough to be sure, say what is missing and lower your confidence instead of guessing.`;
 
-/** A backslash followed by `u`, spelled by char code so no tool in between can decode it. */
-const UNICODE_ESCAPE = `${String.fromCharCode(92)}u`;
+/** A backslash followed by `u`, spelled by code point so no tool in between can decode it. */
+const UNICODE_ESCAPE = `${String.fromCodePoint(92)}u`;
 const ESCAPED_LESS_THAN = `${UNICODE_ESCAPE}003c`;
 const ESCAPED_GREATER_THAN = `${UNICODE_ESCAPE}003e`;
 

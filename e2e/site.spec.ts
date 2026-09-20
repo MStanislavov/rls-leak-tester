@@ -21,13 +21,16 @@ const PGLITE_ASSET = /\.(wasm|data)(\?|$)/;
 
 /**
  * Strings that survive minification and exist only in code the landing page must not ship:
- * PGlite's loader, CodeMirror's view, the matrix runner, and the SQL of the templates.
+ * PGlite's loader, CodeMirror's view, the matrix runner, the SQL of the templates, and zod (the
+ * name of its error class; about 96 KB gzip that one schema import in the header would put on
+ * every route). The bodies are compared in lower case.
  */
 const HEAVY_CODE_MARKERS = [
   "pglite.wasm",
   "cm-editor",
   "rls_leak_tester_source",
   "enable row level security",
+  "zoderror",
 ];
 
 /** Chunk names are hashes, so the check looks inside the document and every script it loaded. */
@@ -97,7 +100,7 @@ test.describe(`app shell, landing page and docs (${mode})`, () => {
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("RLS Leak Tester");
   });
 
-  test("the landing page stays light: no PGlite, no CodeMirror, no runner, no template SQL", async ({
+  test("the landing page stays light: no PGlite, no CodeMirror, no runner, no template SQL, no zod", async ({
     page,
   }) => {
     const { guard, response } = await open(page, "/");

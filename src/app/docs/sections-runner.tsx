@@ -1,3 +1,4 @@
+import { ScrollSection } from "@/components/site/scroll-region";
 import { StatusBadge, VerdictBadge } from "@/components/site/status-badge";
 import { BLOCKED_SQLSTATE, CONSTRAINT_SQLSTATES } from "@/lib/site/docs";
 import { STATUS_META, VERDICT_META } from "@/lib/site/status";
@@ -28,7 +29,7 @@ export function HowItWorksSection() {
           <a href="#supabase-mode" className="underline underline-offset-4">
             Supabase mode
           </a>
-          .
+          {"."}
         </li>
         <li>
           <strong>Personas</strong>: a label, a database role (<Code>anon</Code>,{" "}
@@ -188,7 +189,7 @@ export function OutcomesSection() {
         those two sets and from the errors the probe met. Every status has its own icon and its own
         word; colour is never the only signal.
       </P>
-      <div role="region" aria-label="Cell statuses" tabIndex={0} className="overflow-x-auto">
+      <ScrollSection label="Cell statuses" className="overflow-x-auto">
         <table className="w-full border-collapse text-left text-sm">
           <thead>
             <tr className="border-b text-xs text-muted-foreground">
@@ -219,7 +220,7 @@ export function OutcomesSection() {
             ))}
           </tbody>
         </table>
-      </div>
+      </ScrollSection>
       <H3>Blocked or inconclusive: the SQLSTATE decides</H3>
       <Ul>
         <li>

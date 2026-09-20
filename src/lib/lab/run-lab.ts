@@ -54,14 +54,14 @@ export interface LabTimers {
 
 export interface LabRunOptions {
   /** The Cancel button. */
-  readonly signal?: AbortSignal | undefined;
-  readonly onProgress?: ((progress: MatrixProgress) => void) | undefined;
+  readonly signal?: AbortSignal;
+  readonly onProgress?: (progress: MatrixProgress) => void;
   /** Defaults to the run ceiling of rules.yaml. */
-  readonly ceilingMs?: number | undefined;
+  readonly ceilingMs?: number;
   /** The per-statement timeout the engine was created with; only used in messages. */
-  readonly probeTimeoutMs?: number | undefined;
+  readonly probeTimeoutMs?: number;
   /** Test seam; defaults to `setTimeout` / `clearTimeout`. */
-  readonly timers?: LabTimers | undefined;
+  readonly timers?: LabTimers;
 }
 
 export type LabFailureReason = "ceiling" | "engine";

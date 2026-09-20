@@ -16,9 +16,9 @@ export interface WaitOptions {
   /** Pause between two polls. */
   readonly intervalMs: number;
   /** Defaults to a `setTimeout` sleep. */
-  readonly sleep?: ((ms: number) => Promise<void>) | undefined;
+  readonly sleep?: (ms: number) => Promise<void>;
   /** Defaults to `Date.now`. */
-  readonly clock?: Clock | undefined;
+  readonly clock?: Clock;
 }
 
 function defaultSleep(ms: number): Promise<void> {

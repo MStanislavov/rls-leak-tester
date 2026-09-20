@@ -195,6 +195,10 @@ function TableSection({
   readonly onEditSql: (cell: ExpectationCellView, table: LabTableView) => void;
 } & Pick<TablesPanelProps, "onSetColumn" | "onResetTable" | "onSetExpectation" | "readOnly">) {
   const { table } = entry;
+  // Read-only, the selects are disabled and leave the tab order, so the scroller itself takes focus.
+  const scrollerProps = readOnly
+    ? { tabIndex: 0, role: "group", "aria-label": `Expectations for ${table.key}` }
+    : {};
   return (
     <li
       data-testid="table-config"
@@ -254,12 +258,7 @@ function TableSection({
       ) : null}
 
       {entry.rows.length === 0 ? null : (
-        <div
-          className="relative overflow-x-auto"
-          {...(readOnly
-            ? { tabIndex: 0, role: "group", "aria-label": `Expectations for ${table.key}` }
-            : {})}
-        >
+        <div className="relative overflow-x-auto" {...scrollerProps}>
           <table className="w-full min-w-[27rem] border-collapse text-xs">
             <caption className="sr-only">
               Expected scope per persona and operation for {table.key}

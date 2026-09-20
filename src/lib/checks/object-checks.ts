@@ -8,7 +8,7 @@ import type { Finding, StaticCheckContext } from "./types";
 
 /** The Supabase shim's own functions (src/lib/engine/supabase-shim.ts): not the user's code. */
 const SHIM_SCHEMA = "auth";
-const SHIM_FUNCTIONS: readonly string[] = ["uid", "role", "email", "jwt"];
+const SHIM_FUNCTIONS: ReadonlySet<string> = new Set(["uid", "role", "email", "jwt"]);
 
 /** RLS007: SECURITY DEFINER and no `search_path` entry in `proconfig`. */
 export function checkSecurityDefinerSearchPath(
@@ -19,11 +19,7 @@ export function checkSecurityDefinerSearchPath(
     .filter((fn) => fn.securityDefiner && fn.searchPath === null)
     .filter(
       (fn) =>
-        !(
-          context.mode === "supabase" &&
-          fn.schema === SHIM_SCHEMA &&
-          SHIM_FUNCTIONS.includes(fn.name)
-        ),
+        !(context.mode === "supabase" && fn.schema === SHIM_SCHEMA && SHIM_FUNCTIONS.has(fn.name)),
     )
     .map((fn) =>
       finding("RLS007", functionObject(fn), {
@@ -38,7 +34,7 @@ export function checkSecurityDefinerSearchPath(
     );
 }
 
-const VIEW_PRIVILEGES: readonly string[] = ["SELECT", "INSERT", "UPDATE", "DELETE"];
+const VIEW_PRIVILEGES: ReadonlySet<string> = new Set(["SELECT", "INSERT", "UPDATE", "DELETE"]);
 
 /**
  * Who can reach the view. Introspection lists the privileges of views beside those of tables (the
@@ -61,7 +57,7 @@ function reachability(
     };
   }
   const grantees = [PUBLIC_GRANTEE, ...roles].filter((role) =>
-    entries.some((entry) => entry.grantee === role && VIEW_PRIVILEGES.includes(entry.privilege)),
+    entries.some((entry) => entry.grantee === role && VIEW_PRIVILEGES.has(entry.privilege)),
   );
   return { reachable: grantees.length > 0, text: grantees.join(", ") };
 }
@@ -93,7 +89,7 @@ export function checkViewsBypassingRls(catalog: Catalog, context: StaticCheckCon
           (table) => table.schema === reference.schema && table.name === reference.name,
         ),
       )
-      .filter((table): table is CatalogTable => table !== undefined && table.rlsEnabled);
+      .filter((table): table is CatalogTable => table?.rlsEnabled === true);
     const reach = reachability(catalog, view, roles);
     if (protectedTables.length === 0 || !reach.reachable) {
       continue;

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { CodeListing } from "@/components/site/scroll-region";
 import { DOCS_SECTIONS, type DocsSectionId } from "@/lib/site/docs";
 import { cn } from "@/lib/utils";
 
@@ -64,14 +65,12 @@ export function Code({ children }: { readonly children: ReactNode }) {
 
 export function Sql({ label, children }: { readonly label: string; readonly children: string }) {
   return (
-    <pre
-      role="region"
-      aria-label={label}
-      tabIndex={0}
-      className="overflow-x-auto rounded-lg border bg-muted/50 p-3 font-mono text-xs leading-relaxed"
+    <CodeListing
+      label={label}
+      className="overflow-x-auto rounded-lg border bg-muted/50 p-3 font-mono text-xs leading-relaxed whitespace-pre"
     >
       <code>{children}</code>
-    </pre>
+    </CodeListing>
   );
 }
 

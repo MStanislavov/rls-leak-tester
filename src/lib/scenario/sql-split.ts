@@ -40,11 +40,23 @@ export interface SqlPosition {
 
 const CR = 13;
 const LF = 10;
+/** What `codeAt` answers past the end of the script: no character has this code. */
+const NO_CHARACTER = -1;
+
+/**
+ * The code point at an offset. The scanner moves one UTF-16 code unit at a time, and every test
+ * below only tells single ASCII characters from "anything from U+0080 up", so the two halves of a
+ * surrogate pair (the whole code point at the first, the low surrogate at the second) both count
+ * as identifier characters, exactly like any other non-ASCII character.
+ */
+function codeAt(sql: string, offset: number): number {
+  return sql.codePointAt(offset) ?? NO_CHARACTER;
+}
 
 function isLineBreakAt(sql: string, offset: number): boolean {
-  const code = sql.charCodeAt(offset);
+  const code = codeAt(sql, offset);
   // "\r\n" is one break, counted at the "\n".
-  return code === LF || (code === CR && sql.charCodeAt(offset + 1) !== LF);
+  return code === LF || (code === CR && codeAt(sql, offset + 1) !== LF);
 }
 
 /** Line and column counter that only moves forward, so a whole script is read once. */
@@ -94,7 +106,7 @@ function isIdentPart(code: number): boolean {
 }
 
 const DOLLAR_TAG = /\$(?:[A-Za-z_\u0080-￿][A-Za-z0-9_\u0080-￿]*)?\$/y;
-const ROUTINE_KEYWORDS: readonly string[] = ["function", "procedure"];
+const ROUTINE_KEYWORDS: ReadonlySet<string> = new Set(["function", "procedure"]);
 
 class Splitter {
   private pos = 0;
@@ -122,7 +134,7 @@ class Splitter {
   }
 
   private step(): void {
-    const code = this.sql.charCodeAt(this.pos);
+    const code = codeAt(this.sql, this.pos);
     if (isWhitespace(code)) {
       this.pos += 1;
     } else if (this.sql.startsWith("--", this.pos)) {
@@ -175,7 +187,7 @@ class Splitter {
   }
 
   private skipWhile(test: (code: number) => boolean): void {
-    while (this.pos < this.sql.length && test(this.sql.charCodeAt(this.pos))) {
+    while (this.pos < this.sql.length && test(codeAt(this.sql, this.pos))) {
       this.pos += 1;
     }
   }
@@ -234,8 +246,8 @@ class Splitter {
   private continuesOnNextLine(): boolean {
     let look = this.pos;
     let sawLineBreak = false;
-    while (look < this.sql.length && isWhitespace(this.sql.charCodeAt(look))) {
-      const code = this.sql.charCodeAt(look);
+    while (look < this.sql.length && isWhitespace(codeAt(this.sql, look))) {
+      const code = codeAt(this.sql, look);
       sawLineBreak ||= code === LF || code === CR;
       look += 1;
     }
@@ -280,14 +292,11 @@ class Splitter {
     if (first !== "create" || second === undefined) {
       return false;
     }
-    if (ROUTINE_KEYWORDS.includes(second)) {
+    if (ROUTINE_KEYWORDS.has(second)) {
       return true;
     }
     return (
-      second === "or" &&
-      third === "replace" &&
-      fourth !== undefined &&
-      ROUTINE_KEYWORDS.includes(fourth)
+      second === "or" && third === "replace" && fourth !== undefined && ROUTINE_KEYWORDS.has(fourth)
     );
   }
 

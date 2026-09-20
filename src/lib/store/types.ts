@@ -75,9 +75,9 @@ export interface StoreErrorIssue {
 }
 
 export interface StoreErrorDetails {
-  issues?: readonly StoreErrorIssue[] | undefined;
+  issues?: readonly StoreErrorIssue[];
   /** Seconds, for `rate_limited` and `unavailable`. */
-  retryAfterSeconds?: number | undefined;
+  retryAfterSeconds?: number;
   cause?: unknown;
 }
 

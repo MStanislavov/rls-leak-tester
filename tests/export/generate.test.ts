@@ -105,6 +105,11 @@ describe("generateCiExport", () => {
     expect(header).toContain("-- Mode: postgres.");
     expect(header).toContain(`-- Core principle: ${CORE_PRINCIPLE}`);
     expect(header).toContain("-- 2 of 4 cells");
+    // A rollback does not take back a sequence: the header must not promise more than is true.
+    expect(header).not.toContain("the database is unchanged afterwards");
+    expect(header).toContain("rolls everything back: rows, roles and settings are as before.");
+    expect(header).toContain("sequence");
+    expect(header).toContain("GENERATED ALWAYS AS IDENTITY");
     expect(header.split("\n").every((line) => line.startsWith("--"))).toBe(true);
     expect(sql).toContain(
       `${RESET_SESSION.map((line) => `${line};`).join("\n")}\nset lc_messages = 'C';`,

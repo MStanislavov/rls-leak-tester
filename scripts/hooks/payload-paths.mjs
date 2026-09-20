@@ -33,6 +33,21 @@ function isRecord(value) {
 }
 
 /**
+ * What `tool_input` names as a path: the file, the notebook, and the file of every edit.
+ * @param {unknown} input
+ * @returns {unknown[]}
+ */
+function inputPaths(input) {
+  if (!isRecord(input)) return [];
+  const edits = Array.isArray(input["edits"]) ? input["edits"] : [];
+  return [
+    input["file_path"],
+    input["notebook_path"],
+    ...edits.filter(isRecord).map((edit) => edit["file_path"]),
+  ];
+}
+
+/**
  * The paths named by a tool call: Write, Edit and MultiEdit use `file_path`, NotebookEdit uses
  * `notebook_path`, a PostToolUse payload repeats the path as `tool_response.filePath`, and a list
  * of `edits` may carry a path per entry.
@@ -41,19 +56,11 @@ function isRecord(value) {
  */
 export function collectPaths(payload) {
   const base = typeof payload["cwd"] === "string" && payload["cwd"] !== "" ? payload["cwd"] : ".";
-  /** @type {unknown[]} */
-  const candidates = [];
-  const input = payload["tool_input"];
-  if (isRecord(input)) {
-    candidates.push(input["file_path"], input["notebook_path"]);
-    const edits = input["edits"];
-    if (Array.isArray(edits)) {
-      for (const edit of edits) if (isRecord(edit)) candidates.push(edit["file_path"]);
-    }
-  }
   const response = payload["tool_response"];
-  if (isRecord(response)) candidates.push(response["filePath"]);
-
+  const candidates = [
+    ...inputPaths(payload["tool_input"]),
+    isRecord(response) ? response["filePath"] : undefined,
+  ];
   /** @type {Set<string>} */
   const unique = new Set();
   for (const candidate of candidates) {

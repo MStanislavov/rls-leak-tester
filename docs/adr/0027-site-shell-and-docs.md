@@ -1,4 +1,4 @@
-# ADR (draft): app shell, landing page and /docs
+# ADR: app shell, landing page and /docs
 
 - Status: proposed (draft, numbered by the orchestrator)
 - Date: 2026-09-20

@@ -42,7 +42,12 @@ import {
   type SubProbeResult,
   type Verdict,
 } from "./result";
-import { EngineError, SQLSTATE_INSUFFICIENT_PRIVILEGE, SqlError } from "./types";
+import {
+  ENGINE_TIMEOUT_MESSAGE,
+  EngineError,
+  SQLSTATE_INSUFFICIENT_PRIVILEGE,
+  SqlError,
+} from "./types";
 
 /** Unique keys in code-unit order: the one order of keys in a result. */
 export function sortKeys(keys: Iterable<string>): string[] {
@@ -121,6 +126,14 @@ export function isStatementDenial(failure: ProbeFailure): boolean {
 /** SQLSTATE class 22 (data exception): the value does not fit the column's type. */
 export function isDataException(failure: ProbeFailure): boolean {
   return failure.sqlState?.startsWith("22") === true;
+}
+
+/**
+ * `true` for what `toProbeFailure` makes of an `EngineTimeoutError`: the statement never came
+ * back. User SQL cannot forge it, because every error Postgres raises has a SQLSTATE.
+ */
+export function isTimeoutFailure(failure: ProbeFailure): boolean {
+  return failure.sqlState === null && ENGINE_TIMEOUT_MESSAGE.test(failure.message);
 }
 
 /** `true` when the database is gone (timeout, terminated worker) and setup must be replayed. */

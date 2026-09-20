@@ -1,0 +1,286 @@
+# RLS Leak Tester: continuous integration (brief 5.3, docs/adr: "CI and Dependabot").
+#
+# Five jobs, so that a red run says which promise broke: static, unit, e2e, self-isolation, sonar.
+# A fresh fork without any secret is fully green: only the sonar job wants secrets, and it skips
+# its steps cleanly when SONAR_TOKEN is absent.
+#
+# Actions are pinned to a commit, with the release in a comment; Dependabot moves both.
+# tests/ci/workflow.test.ts pins the structure of this file.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer run of the same branch or pull request replaces the one in progress.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # Active LTS. package.json engines wants >=22.22.2; ADR 0001 allows 22.x or 24.x. Node 24.21
+  # bundles npm 11.19, the npm of the lockfile and of the allowScripts field.
+  NODE_VERSION: "24"
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  static:
+    name: Lint, types, rules, format
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Install
+        id: install
+        run: npm ci
+      # Each check runs even when an earlier one failed: one run shows everything that is wrong.
+      - name: Lint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm run lint
+      - name: Type-check
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm run typecheck
+      - name: Rules check
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm run rules
+      - name: Format check
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm run format:check
+
+  unit:
+    name: Unit tests with coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      # The image and the settings of docker-compose.yml: no persistence.
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      # Loopback, not "localhost" and not the service name: the test network guard (TEST-001)
+      # lets nothing else through. With it the Redis contract suite runs on the real adapter.
+      REDIS_URL: redis://127.0.0.1:6379
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Install
+        run: npm ci
+      # The thresholds (80 percent lines and branches of src/lib) live in vitest.config.mts.
+      - name: Unit tests with coverage
+        run: npm run test:coverage
+      - name: Upload the LCOV report for the sonar job
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-lcov
+          path: coverage/lcov.info
+          if-no-files-found: error
+          retention-days: 7
+
+  e2e:
+    name: Build and Playwright
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Install Chromium and its system libraries
+        run: npx playwright install --with-deps chromium
+      # next build, then Playwright against next start: the production Content-Security-Policy.
+      - name: Build and run the end-to-end tests
+        run: npm run e2e
+      - name: Upload the Playwright report
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  self-isolation:
+    # RLS Leak Tester verifies itself: the exported test of the template "own-scenarios-table"
+    # runs against supabase/migrations in a real Postgres. Green only if the proof passes.
+    # scripts/self-isolation/verify-postgres.sh is the same thing with `docker run`.
+    name: Self-isolation proof
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      # PGlite 0.5.8 is PostgreSQL 18; the image is the one the exported workflow names.
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        # Over TCP: the image's temporary start-up server listens on the socket only.
+        options: >-
+          --health-cmd "pg_isready --host 127.0.0.1 --username postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: "5432"
+      PGUSER: postgres
+      # Not a secret: the password of the service container above, which lives for this job only.
+      PGPASSWORD: postgres
+      PGDATABASE: postgres
+      # The matrix runner pins the session to UTC before the schema and the seed; so does this.
+      PGTZ: UTC
+      # File name order of the migrations must not depend on the runner's locale.
+      LC_ALL: C
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Install
+        run: npm ci
+      # Writes rls-isolation.setup.sql, .seed.sql and .test.sql; refuses when the template is not
+      # the migrations on disk or when the verdict on PGlite is not ISOLATED.
+      - name: Generate the exported test of the app's own template
+        run: npx tsx scripts/self-isolation/generate.ts "$RUNNER_TEMP/self-isolation"
+      - name: Make sure psql is available
+        run: command -v psql || (sudo apt-get update && sudo apt-get install --yes postgresql-client)
+      - name: Wait for Postgres
+        run: |
+          for attempt in $(seq 1 60); do
+            if pg_isready --quiet; then
+              psql --no-psqlrc --quiet --tuples-only --no-align --command "select version()"
+              exit 0
+            fi
+            echo "waiting for Postgres ($attempt)"
+            sleep 1
+          done
+          echo "Postgres did not become ready within 60 seconds" >&2
+          exit 1
+      # One psql, so one session, as the matrix runner and the exported workflow do: the Supabase
+      # shim and the default grants, every migration in file name order, the seed. It stops at
+      # the first error of any file.
+      - name: Load the Supabase setup, supabase/migrations and the seed
+        run: |
+          set -- --file "$RUNNER_TEMP/self-isolation/rls-isolation.setup.sql"
+          for migration in supabase/migrations/*.sql; do
+            set -- "$@" --file "$migration"
+          done
+          set -- "$@" --file "$RUNNER_TEMP/self-isolation/rls-isolation.seed.sql"
+          psql --no-psqlrc -v ON_ERROR_STOP=1 "$@"
+      - name: Prove isolation
+        run: psql --no-psqlrc -v ON_ERROR_STOP=1 --file "$RUNNER_TEMP/self-isolation/rls-isolation.test.sql"
+
+  sonar:
+    # SonarQube Cloud or a self-hosted server. Secrets: SONAR_TOKEN, and SONAR_HOST_URL for a
+    # self-hosted server (absent means SonarQube Cloud). Repository variables, both optional:
+    # SONAR_ORGANIZATION (SonarQube Cloud needs it) and SONAR_PROJECT_KEY (when the key on the
+    # server is not the one in sonar-project.properties).
+    name: Sonar scan and quality gate
+    needs: unit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      # The secrets context does not exist in a job-level `if`. The secret is mapped into the
+      # environment of this one step, which publishes only whether it is set; every later step
+      # asks that output. Forks, Dependabot and a fresh clone have no token: the job is green
+      # and says that it skipped.
+      - name: Is a Sonar token configured?
+        id: sonar
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          if [ -n "$SONAR_TOKEN" ]; then
+            echo "has_token=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "has_token=false" >>"$GITHUB_OUTPUT"
+            echo "::notice title=Sonar scan skipped::The secret SONAR_TOKEN is not available to this run, so nothing was scanned."
+          fi
+      - name: Check out with full history
+        if: ${{ steps.sonar.outputs.has_token == 'true' }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Blame data and the new-code period need the history.
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Node
+        if: ${{ steps.sonar.outputs.has_token == 'true' }}
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Install
+        if: ${{ steps.sonar.outputs.has_token == 'true' }}
+        run: npm ci
+      - name: Download the LCOV report of the unit job
+        if: ${{ steps.sonar.outputs.has_token == 'true' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: coverage-lcov
+          path: coverage
+      # @sonar/scan reads SONAR_TOKEN and SONAR_HOST_URL from the environment and brings its own
+      # Java. It gives the environment precedence over sonar-project.properties, also when a
+      # value is empty, so the optional values become -D options only when they are set.
+      # sonar.qualitygate.wait makes the command fail when the gate fails.
+      - name: Scan and wait for the quality gate
+        if: ${{ steps.sonar.outputs.has_token == 'true' }}
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+          CI_SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION }}
+          CI_SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
+        run: |
+          test -f coverage/lcov.info
+          if [ -z "$SONAR_HOST_URL" ]; then
+            export SONAR_HOST_URL=https://sonarcloud.io
+          fi
+          set -- -Dsonar.qualitygate.wait=true
+          if [ -n "$CI_SONAR_ORGANIZATION" ]; then
+            set -- "$@" "-Dsonar.organization=$CI_SONAR_ORGANIZATION"
+          fi
+          if [ -n "$CI_SONAR_PROJECT_KEY" ]; then
+            set -- "$@" "-Dsonar.projectKey=$CI_SONAR_PROJECT_KEY"
+          fi
+          npx --no-install sonar-scanner-npm "$@"

@@ -59,64 +59,99 @@ function readQuoted(
   return { end: -1, content };
 }
 
+/** What `scan` builds up while it walks the text. */
+interface ScanState {
+  readonly depth: number[];
+  readonly literals: string[];
+  readonly quotedIdentifiers: string[];
+  masked: string;
+  level: number;
+  balanced: boolean;
+}
+
+function push(state: ScanState, chars: string): void {
+  for (const char of chars) {
+    state.depth.push(state.level);
+    state.masked += char;
+  }
+}
+
+/** A `)`, `]` or `END`: one level up, and unbalanced when there was nothing to close. */
+function closeLevel(state: ScanState): void {
+  state.level -= 1;
+  state.balanced &&= state.level >= 0;
+}
+
+/** A string literal or quoted identifier that opens at `index`; returns the index after it. */
+function scanQuoted(state: ScanState, text: string, index: number, quote: string): number {
+  const previous = text.charAt(index - 1);
+  const escapeString =
+    quote === "'" && (previous === "E" || previous === "e") && !isWordChar(text[index - 2]);
+  const quoted = readQuoted(text, index, quote, escapeString);
+  const terminated = quoted.end !== -1;
+  const end = terminated ? quoted.end : text.length;
+  state.balanced &&= terminated;
+  (quote === "'" ? state.literals : state.quotedIdentifiers).push(quoted.content);
+  push(state, quote + "_".repeat(Math.max(0, end - index - 2)) + (terminated ? quote : ""));
+  return end;
+}
+
+/** A word that starts at `index`; `CASE ... END` nests like brackets. Returns the index after it. */
+function scanWord(state: ScanState, text: string, index: number): number {
+  let end = index;
+  while (isWordChar(text[end])) {
+    end += 1;
+  }
+  const word = text.slice(index, end).toUpperCase();
+  if (word === "END") {
+    closeLevel(state);
+  }
+  push(state, text.slice(index, end));
+  if (word === "CASE") {
+    state.level += 1;
+  }
+  return end;
+}
+
+/** Any other single character. A bracket itself is at the depth of what surrounds it. */
+function scanCharacter(state: ScanState, char: string): void {
+  if (char === ")" || char === "]") {
+    closeLevel(state);
+  }
+  push(state, char);
+  if (char === "(" || char === "[") {
+    state.level += 1;
+  }
+}
+
 function scan(text: string): Scan {
-  const depth: number[] = [];
-  const literals: string[] = [];
-  const quotedIdentifiers: string[] = [];
-  let masked = "";
-  let level = 0;
-  let balanced = true;
-  let index = 0;
-
-  const push = (chars: string): void => {
-    for (const char of chars) {
-      depth.push(level);
-      masked += char;
-    }
+  const state: ScanState = {
+    depth: [],
+    literals: [],
+    quotedIdentifiers: [],
+    masked: "",
+    level: 0,
+    balanced: true,
   };
-
+  let index = 0;
   while (index < text.length) {
     const char = text.charAt(index);
     if (char === "'" || char === '"') {
-      const previous = text.charAt(index - 1);
-      const escapeString =
-        char === "'" && (previous === "E" || previous === "e") && !isWordChar(text[index - 2]);
-      const quoted = readQuoted(text, index, char, escapeString);
-      const end = quoted.end === -1 ? text.length : quoted.end;
-      balanced &&= quoted.end !== -1;
-      (char === "'" ? literals : quotedIdentifiers).push(quoted.content);
-      push(char + "_".repeat(Math.max(0, end - index - 2)) + (quoted.end === -1 ? "" : char));
-      index = end;
-    } else if (char === "(" || char === "[") {
-      push(char);
-      level += 1;
-      index += 1;
-    } else if (char === ")" || char === "]") {
-      level -= 1;
-      balanced &&= level >= 0;
-      push(char);
-      index += 1;
+      index = scanQuoted(state, text, index, char);
     } else if (isWordChar(char) && !isWordChar(text[index - 1])) {
-      let end = index;
-      while (isWordChar(text[end])) {
-        end += 1;
-      }
-      const word = text.slice(index, end).toUpperCase();
-      if (word === "END") {
-        level -= 1;
-        balanced &&= level >= 0;
-      }
-      push(text.slice(index, end));
-      if (word === "CASE") {
-        level += 1;
-      }
-      index = end;
+      index = scanWord(state, text, index);
     } else {
-      push(char);
+      scanCharacter(state, char);
       index += 1;
     }
   }
-  return { masked, depth, literals, quotedIdentifiers, balanced: balanced && level === 0 };
+  return {
+    masked: state.masked,
+    depth: state.depth,
+    literals: state.literals,
+    quotedIdentifiers: state.quotedIdentifiers,
+    balanced: state.balanced && state.level === 0,
+  };
 }
 
 /** Removes white space and every pair of parentheses that wraps the whole expression. */
@@ -244,6 +279,56 @@ export type Looseness =
 
 const NOT_LOOSER: Looseness = { looser: false };
 
+/** WITH CHECK is literally true: looser than any USING that is not literally true itself. */
+function compareTrueCheckToUsing(using: string | null): Looseness {
+  if (using === null) {
+    return { looser: true, reason: "check-true-without-using", dropped: [], added: [] };
+  }
+  return isLiterallyTrue(using)
+    ? NOT_LOOSER
+    : { looser: true, reason: "check-true", dropped: flattenBoolean(using, "AND"), added: [] };
+}
+
+/**
+ * One OR-ed alternative of WITH CHECK against the AND-ed conditions of USING. `null` when the
+ * alternative has a condition of its own: then it says nothing, and the next one is looked at.
+ */
+function compareAlternativeToRequired(
+  alternative: string,
+  alternatives: readonly string[],
+  required: readonly string[],
+): Looseness | null {
+  const requiredSet = new Set(required);
+  const kept = new Set(flattenBoolean(alternative, "AND"));
+  if (![...kept].every((condition) => requiredSet.has(condition))) {
+    return null;
+  }
+  const dropped = required.filter((condition) => !kept.has(condition));
+  const added = alternatives.filter((other) => other !== alternative);
+  if (dropped.length === 0 && added.length === 0) {
+    return NOT_LOOSER;
+  }
+  return {
+    looser: true,
+    reason: added.length > 0 ? "adds-alternatives" : "drops-conditions",
+    dropped,
+    added,
+  };
+}
+
+/** USING is itself `A OR B` and WITH CHECK repeats every alternative and adds more. */
+function compareToUsingAlternatives(using: string, alternatives: readonly string[]): Looseness {
+  const usingAlternatives = flattenBoolean(using, "OR");
+  const accepted = new Set(alternatives);
+  if (usingAlternatives.length > 1 && usingAlternatives.every((one) => accepted.has(one))) {
+    const added = alternatives.filter((one) => !usingAlternatives.includes(one));
+    if (added.length > 0) {
+      return { looser: true, reason: "adds-alternatives", dropped: [], added };
+    }
+  }
+  return NOT_LOOSER;
+}
+
 /**
  * Is an explicit WITH CHECK provably looser than USING? Decided only in three cases: WITH CHECK
  * is literally true; WITH CHECK keeps a subset of USING's AND-ed conditions; WITH CHECK is such a
@@ -256,50 +341,24 @@ export function compareCheckToUsing(using: string | null, withCheck: string | nu
     return NOT_LOOSER;
   }
   if (isLiterallyTrue(withCheck)) {
-    if (using === null) {
-      return { looser: true, reason: "check-true-without-using", dropped: [], added: [] };
-    }
-    return isLiterallyTrue(using)
-      ? NOT_LOOSER
-      : { looser: true, reason: "check-true", dropped: flattenBoolean(using, "AND"), added: [] };
+    return compareTrueCheckToUsing(using);
   }
   if (using === null) {
     return NOT_LOOSER;
   }
   const required = flattenBoolean(using, "AND");
-  const requiredSet = new Set(required);
   const alternatives = flattenBoolean(withCheck, "OR");
   for (const alternative of alternatives) {
-    const kept = new Set(flattenBoolean(alternative, "AND"));
-    if (![...kept].every((condition) => requiredSet.has(condition))) {
-      continue;
-    }
-    const dropped = required.filter((condition) => !kept.has(condition));
-    const added = alternatives.filter((other) => other !== alternative);
-    if (dropped.length === 0 && added.length === 0) {
-      return NOT_LOOSER;
-    }
-    return {
-      looser: true,
-      reason: added.length > 0 ? "adds-alternatives" : "drops-conditions",
-      dropped,
-      added,
-    };
-  }
-  // USING is itself `A OR B` and WITH CHECK repeats every alternative and adds more.
-  const usingAlternatives = flattenBoolean(using, "OR");
-  const accepted = new Set(alternatives);
-  if (usingAlternatives.length > 1 && usingAlternatives.every((one) => accepted.has(one))) {
-    const added = alternatives.filter((one) => !usingAlternatives.includes(one));
-    if (added.length > 0) {
-      return { looser: true, reason: "adds-alternatives", dropped: [], added };
+    const verdict = compareAlternativeToRequired(alternative, alternatives, required);
+    if (verdict !== null) {
+      return verdict;
     }
   }
-  return NOT_LOOSER;
+  return compareToUsingAlternatives(using, alternatives);
 }
 
-const USER_METADATA_KEY = /(^|[^A-Za-z0-9_])(user_metadata|raw_user_meta_data)([^A-Za-z0-9_]|$)/;
-const USER_METADATA_COLUMN = /(^|[^A-Za-z0-9_$])raw_user_meta_data([^A-Za-z0-9_$]|$)/i;
+const USER_METADATA_KEY = /(^|\W)(user_metadata|raw_user_meta_data)(\W|$)/;
+const USER_METADATA_COLUMN = /(^|[^\w$])raw_user_meta_data([^\w$]|$)/i;
 
 /**
  * Does the expression read the user-editable metadata? True for a string literal that names the

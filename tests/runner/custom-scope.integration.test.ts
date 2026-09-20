@@ -150,6 +150,19 @@ describe("custom scope, composite keys, quoted identifiers", () => {
     expect(cell.reason).toBe('expectedRowsSql failed: column "nope" does not exist');
   });
 
+  it("a failing expectedRowsSql names the statement that failed, as schema and seed errors do", () => {
+    const cell = cellOf(result, "carol", "documents_leaky", "select");
+    // What ran: the user's query inside the wrapper that reads the key columns.
+    expect(cell.error?.statement).toBe(
+      'select "id"::text as k0 from (\nselect nope from documents_leaky\n) as expected_rows("id")',
+    );
+    // The cell's own statement stays empty: no probe ran, and the CI export embeds that field.
+    expect(cell.statement).toBe("");
+    // A probe that failed is its own statement; only this failure needs to carry one.
+    const probed = result.cells.filter((other) => other.error !== null && other.sql !== "");
+    for (const other of probed) expect(other.error, other.id).not.toHaveProperty("statement");
+  });
+
   it("composite keys whose columns are both scope columns cannot be cloned: skipped", () => {
     // memberships: no owner or tenant configured, default scope none, key (team_id, user_id).
     const cell = cellOf(result, "alice", "memberships", "select");
@@ -194,4 +207,21 @@ describe("custom scope, composite keys, quoted identifiers", () => {
       "public.teams",
     ]);
   });
+});
+
+describe("an expectedRowsSql no query can be built from", () => {
+  it("names the text as the user wrote it", async () => {
+    const twoStatements = "select id from documents; select id from documents";
+    const { result } = await run({
+      ...scenario,
+      expectations: custom("alice", "documents", twoStatements),
+    });
+
+    const cell = cellOf(result, "alice", "documents", "select");
+    expect(cell).toMatchObject({
+      status: "inconclusive",
+      error: { sqlState: null, statement: twoStatements },
+    });
+    expect(cell.reason).toContain("exactly one query; it has 2 statements");
+  }, 60_000);
 });

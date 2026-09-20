@@ -35,7 +35,7 @@ export class NamedParameterError extends Error {
 }
 
 const DOLLAR_TAG = /\$(?:[A-Za-z_\P{ASCII}][A-Za-z0-9_\P{ASCII}]*)?\$/uy;
-const NAME = /[A-Za-z_][A-Za-z0-9_]*/y;
+const NAME = /[A-Za-z_]\w*/y;
 
 function isIdentPart(char: string | undefined): boolean {
   return char !== undefined && /[A-Za-z0-9_$\P{ASCII}]/u.test(char);
@@ -124,7 +124,7 @@ function endOfOpaqueRun(sql: string, pos: number): number {
     return pos + 2;
   }
   if (char === "$" && !isIdentPart(sql[pos - 1])) {
-    if (/[0-9]/.test(sql[pos + 1] ?? "")) {
+    if (/\d/.test(sql[pos + 1] ?? "")) {
       throw new NamedParameterError(
         "expectedRowsSql uses a positional parameter ($1). Use :sub and :claims instead.",
       );

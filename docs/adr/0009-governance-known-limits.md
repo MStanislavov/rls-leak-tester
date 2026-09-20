@@ -1,4 +1,4 @@
-# ADR (draft): Three more governance gaps closed, and the limits we accept
+# ADR: Three more governance gaps closed, and the limits we accept
 
 - Status: accepted; the `CLAUDE.md` lines of section 5 are prepared as a patch and wait for the owner
 - Date: 2026-09-19

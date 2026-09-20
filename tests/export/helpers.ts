@@ -94,15 +94,36 @@ export async function runTestFile(engine: SqlEngine, content: string): Promise<T
   }
 }
 
-/** The lines of the final exception: `[status] cell id (label): ...`. */
-export function failedCells(error: SqlError): { status: string; id: string; line: string }[] {
+export interface ReportedLine {
+  readonly status: string;
+  /** The cell the line is about; empty for a line about the setup or about a cell nobody named. */
+  readonly id: string;
+  readonly line: string;
+}
+
+/**
+ * The lines of the final exception: `[status] cell id (label): ...`.
+ *
+ * A cell id is `persona|schema.table|operation`, and a quoted table name may hold any character
+ * (`"Order Items"`, `"a (b)"`), as the label after it may. No character therefore ends the id:
+ * it is found among `cellIds`, the ids of the run, the longest one first.
+ */
+export function failedCells(error: SqlError, cellIds: readonly string[]): ReportedLine[] {
+  const longestFirst = [...cellIds].sort((a, b) => b.length - a.length);
   return error.message
     .split("\n")
     .slice(1)
     .map((line) => {
-      const match = /^\[(\w+)\] (\S+) \(/.exec(line);
-      return { status: match?.[1] ?? "", id: match?.[2] ?? "", line };
+      const status = /^\[(\w+)\] /.exec(line)?.[1] ?? "";
+      const rest = line.slice(`[${status}] `.length);
+      const id = longestFirst.find((candidate) => rest.startsWith(`${candidate} (`)) ?? "";
+      return { status, id, line };
     });
+}
+
+/** The ids `failedCells` looks for: every cell of the exported run. */
+export function cellIdsOf(exported: Pick<Exported, "matrix">): string[] {
+  return exported.matrix.result.cells.map((cell) => cell.id);
 }
 
 /**

@@ -93,12 +93,12 @@ export interface ExplainDeps {
   readonly limiter: RateLimiter;
   readonly cache: Cache;
   readonly lock: Lock;
-  readonly clock?: Clock | undefined;
-  readonly logger?: ExplainLogger | undefined;
+  readonly clock?: Clock;
+  readonly logger?: ExplainLogger;
   /** The signed-in user, verified on the server. Never taken from the request body. */
-  readonly resolveUserId?: ((request: Request) => Promise<string | undefined>) | undefined;
+  readonly resolveUserId?: (request: Request) => Promise<string | undefined>;
   /** How long a request that lost the lock waits for the winner's cache entry. */
-  readonly followerWait?: Partial<WaitOptions> | undefined;
+  readonly followerWait?: Partial<WaitOptions>;
 }
 
 /** Header of a successful answer: `hit` came from the cache, `miss` from the model. */
@@ -184,8 +184,10 @@ function canonicalExplanation(text: string): string | undefined {
   return parsed.success ? JSON.stringify(parsed.data) : undefined;
 }
 
-const errorNameOf = (error: unknown): string =>
-  isRedisUnavailable(error) ? error.operation : error instanceof Error ? error.name : "unknown";
+function errorNameOf(error: unknown): string {
+  if (isRedisUnavailable(error)) return error.operation;
+  return error instanceof Error ? error.name : "unknown";
+}
 
 interface Flight {
   readonly deps: ExplainDeps;

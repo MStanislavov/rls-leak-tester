@@ -20,7 +20,7 @@ import {
   type RefObject,
 } from "react";
 import { toast } from "sonner";
-import { STATUS_CLASSES, STATUS_ICONS } from "@/components/site/status-badge";
+import { STATUS_ICONS } from "@/components/site/status-badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -52,7 +52,6 @@ import {
   scenarioFileName,
   scenarioFileText,
   scenarioFromTemplate,
-  statusChips,
   validateLabScenario,
   SCENARIO_FILE_TYPE,
   type LabEntry,
@@ -61,15 +60,9 @@ import {
   type SqlKind,
 } from "@/lib/lab";
 import { MAX_TITLE_LENGTH, newScenarioId, resolveOptions, type Scenario } from "@/lib/scenario";
-import {
-  TEMPLATES,
-  TEMPLATE_VARIANT_KINDS,
-  findTemplate,
-  type TemplateVariantKind,
-} from "@/lib/scenario/templates";
-import { STATUS_META, statusMeta } from "@/lib/site/status";
+import { findTemplate, type TemplateVariantKind } from "@/lib/scenario/templates";
+import { STATUS_META } from "@/lib/site/status";
 import { createLocalScenarioStore, isStoreError } from "@/lib/store";
-import { cn } from "@/lib/utils";
 import { CellDrawer } from "./cell-drawer";
 import { FindingsList } from "./findings-list";
 import {
@@ -80,14 +73,15 @@ import {
   type LabToolbarExtension,
 } from "./lab-extensions";
 import { loadLabPorts } from "./lab-engine";
-import { NativeSelect } from "./native-select";
 import { PersonasPanel } from "./personas-panel";
 import { ResultMatrix } from "./result-matrix";
 import { ScenarioMenu } from "./scenario-menu";
 import { ScenarioPanel } from "./scenario-panel";
 import { SetupErrorPanel } from "./setup-error-panel";
 import type { SqlEditorHandle } from "./sql-editor";
+import { StatusFilter } from "./status-filter";
 import { TablesPanel } from "./tables-panel";
+import { TemplateControls, TemplateDescription } from "./template-controls";
 import { useLabRunner } from "./use-lab-runner";
 import { VerdictBanner } from "./verdict-banner";
 
@@ -123,6 +117,9 @@ function initialState({ entry, sharedScenario }: InitialArgs): LabState {
   return initialLabState(blankScenario(newScenarioId("Untitled scenario")), { kind: "blank" });
 }
 
+/** Where a scenario comes from when the caller of `loadScenario` does not say. */
+const IMPORTED_ORIGIN: ScenarioOrigin = { kind: "imported" };
+
 function storeMessage(error: unknown): string {
   if (isStoreError(error)) {
     return error.message;
@@ -143,6 +140,31 @@ function download(fileName: string, text: string): void {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+/** Why the scenario cannot run yet; nothing when it can. */
+function ScenarioProblems({ problems }: { readonly problems: readonly string[] }) {
+  if (problems.length === 0) {
+    return null;
+  }
+  return (
+    <div
+      data-testid="scenario-problems"
+      className="flex items-start gap-2 rounded-md border border-status-overblock/40 bg-status-overblock-bg p-3 text-sm text-status-overblock"
+    >
+      <TriangleAlert aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
+      <div>
+        <p className="font-medium">
+          The scenario cannot run, be saved or be exported until this is fixed:
+        </p>
+        <ul className="list-disc pl-5">
+          {problems.map((problem) => (
+            <li key={problem}>{problem}</li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
 }
 
 /** A disabled fieldset switches every control inside it off: how a panel becomes read-only. */
@@ -359,7 +381,7 @@ export function LabWorkbench({
   );
 
   const loadScenario = useCallback(
-    (next: Scenario, origin: ScenarioOrigin = { kind: "imported" }) =>
+    (next: Scenario, origin: ScenarioOrigin = IMPORTED_ORIGIN) =>
       guardedLoad(() => {
         // A run of the scenario that is being replaced has nothing left to report.
         runner.cancel();
@@ -481,10 +503,6 @@ export function LabWorkbench({
     startRun,
   };
 
-  const templateId = state.origin.kind === "template" ? state.origin.templateId : "";
-  const variant = state.origin.kind === "template" ? state.origin.variant : null;
-  const chips = result === null ? [] : statusChips(result.counts);
-
   return (
     <main
       data-lab-root=""
@@ -514,44 +532,12 @@ export function LabWorkbench({
               onChange={(event) => dispatch({ type: "title/set", title: event.target.value })}
             />
           </div>
-          {readOnly ? null : (
-            <div className="flex flex-col gap-1">
-              <Label htmlFor="template-select">Template</Label>
-              <NativeSelect
-                id="template-select"
-                data-testid="template-select"
-                className="w-56"
-                disabled={busy}
-                value={templateId}
-                onChange={(event) => loadTemplate(event.target.value, variant ?? "leaky")}
-              >
-                {templateId === "" ? <option value="">Your own scenario</option> : null}
-                {TEMPLATES.map((template) => (
-                  <option key={template.id} value={template.id}>
-                    {template.title}
-                  </option>
-                ))}
-              </NativeSelect>
-            </div>
-          )}
-          {variant === null ? null : (
-            <div role="group" aria-label="Template variant" className="flex items-center gap-1">
-              {TEMPLATE_VARIANT_KINDS.map((kind) => (
-                <Button
-                  key={kind}
-                  type="button"
-                  size="sm"
-                  variant={variant === kind ? "secondary" : "ghost"}
-                  aria-pressed={variant === kind}
-                  disabled={busy}
-                  data-testid={`variant-${kind}`}
-                  onClick={() => loadTemplate(templateId, kind)}
-                >
-                  {kind}
-                </Button>
-              ))}
-            </div>
-          )}
+          <TemplateControls
+            origin={state.origin}
+            readOnly={readOnly}
+            busy={busy}
+            onLoadTemplate={loadTemplate}
+          />
           <div className="ml-auto flex flex-wrap items-center gap-1.5">
             {readOnly ? null : (
               <ScenarioMenu
@@ -615,33 +601,9 @@ export function LabWorkbench({
             )}
           </div>
         </div>
-        {templateId === "" ? null : (
-          <p className="text-sm text-muted-foreground" data-testid="template-description">
-            <span className="font-medium text-foreground">
-              {variant === "fixed" ? "The fix: " : "The leak: "}
-            </span>
-            {variant === "fixed" ? findTemplate(templateId)?.fix : findTemplate(templateId)?.leak}
-          </p>
-        )}
+        <TemplateDescription origin={state.origin} />
         {shared?.notice}
-        {problems.length === 0 ? null : (
-          <div
-            data-testid="scenario-problems"
-            className="flex items-start gap-2 rounded-md border border-status-overblock/40 bg-status-overblock-bg p-3 text-sm text-status-overblock"
-          >
-            <TriangleAlert aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
-            <div>
-              <p className="font-medium">
-                The scenario cannot run, be saved or be exported until this is fixed:
-              </p>
-              <ul className="list-disc pl-5">
-                {problems.map((problem) => (
-                  <li key={problem}>{problem}</li>
-                ))}
-              </ul>
-            </div>
-          </div>
-        )}
+        <ScenarioProblems problems={problems} />
       </header>
 
       <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
@@ -724,47 +686,12 @@ export function LabWorkbench({
           )}
           {matrixView === null ? null : (
             <>
-              <div
-                role="group"
-                aria-label="Filter cells by status"
-                className="flex flex-wrap items-center gap-1.5"
-              >
-                {chips.map(({ status, count }) => {
-                  const Icon = STATUS_ICONS[status];
-                  const pressed = state.statusFilter.includes(status);
-                  return (
-                    <button
-                      key={status}
-                      type="button"
-                      aria-pressed={pressed}
-                      data-testid="status-chip"
-                      data-status={status}
-                      data-count={count}
-                      onClick={() => dispatch({ type: "filter/toggle", status })}
-                      className={cn(
-                        "inline-flex h-7 items-center gap-1 rounded-md border px-2 text-xs font-medium",
-                        STATUS_CLASSES[status],
-                        pressed && "ring-2 ring-ring",
-                      )}
-                    >
-                      <Icon aria-hidden="true" className="size-3.5" />
-                      {statusMeta(status).label}
-                      <span className="font-mono">{count}</span>
-                    </button>
-                  );
-                })}
-                {state.statusFilter.length === 0 ? null : (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="xs"
-                    data-testid="status-chip-clear"
-                    onClick={() => dispatch({ type: "filter/clear" })}
-                  >
-                    Show all
-                  </Button>
-                )}
-              </div>
+              <StatusFilter
+                counts={matrixView.counts}
+                active={state.statusFilter}
+                onToggle={(status) => dispatch({ type: "filter/toggle", status })}
+                onClear={() => dispatch({ type: "filter/clear" })}
+              />
               <ResultMatrix
                 view={matrixView}
                 selectedCellId={state.selectedCellId}

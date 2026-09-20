@@ -105,7 +105,7 @@ export function toPostgresPattern(pattern: RegExp): string {
   if (pattern.flags !== "") {
     throw new RangeError(`The pattern ${String(pattern)} has flags; only plain patterns translate`);
   }
-  return pattern.source.replaceAll("\\b", "\\y");
+  return pattern.source.replaceAll(String.raw`\b`, String.raw`\y`);
 }
 
 /** What a failed seed check says when the generator saw no reason in the scenario itself. */
@@ -113,6 +113,17 @@ export const SEED_CHANGED_ADVICE =
   "The expected keys in this file are literal: export the check again after changing the seed. If the keys come from a volatile default such as gen_random_uuid() or now(), they differ on every load: give the seed explicit keys.";
 
 const ROLLBACK = "raise exception using errcode = 'RLT00', message = 'rolled back on purpose'";
+
+/** One function of the runtime; `text` is its body, dollar-quoted with a tag it does not hold. */
+function defineFunction(
+  name: RuntimeFunction,
+  signature: string,
+  language: "sql immutable" | "plpgsql",
+  text: string,
+): string {
+  const header = `create or replace function ${runtimeName(name)}${signature}`;
+  return `${header}\nlanguage ${language} as ${dollarQuote(text.trim(), "fn")};`;
+}
 
 function usingList(maxParams: number): string {
   return Array.from({ length: maxParams }, (_unused, index) => `p_params[${index + 1}]`).join(", ");
@@ -126,63 +137,101 @@ export function runtimeSql(maxParams: number, inconclusive: "fail" | "warn"): st
   const using = usingList(Math.max(1, maxParams));
   const f = (name: RuntimeFunction): string => runtimeName(name);
   const failing = inconclusive === "fail" ? "true" : "p_status <> 'inconclusive'";
-  const body = (text: string): string => dollarQuote(text.trim(), "fn");
 
   const functions: readonly string[] = [
     // -------------------------------------------------------------------------------- classify
-    `create or replace function ${f("blocked")}(p_state text, p_message text) returns boolean
-language sql immutable as ${body(`
+    defineFunction(
+      "blocked",
+      "(p_state text, p_message text) returns boolean",
+      "sql immutable",
+      `
   select p_state = '42501' and p_message !~ ${quoteLiteral(toPostgresPattern(NOT_ABOUT_THE_ROWS))}
-`)};`,
-    `create or replace function ${f("row_violation")}(p_state text, p_message text) returns boolean
-language sql immutable as ${body(`
+`,
+    ),
+    defineFunction(
+      "row_violation",
+      "(p_state text, p_message text) returns boolean",
+      "sql immutable",
+      `
   select p_state = '42501' and p_message ~ ${quoteLiteral(toPostgresPattern(ROW_SECURITY_VIOLATION))}
-`)};`,
-    `create or replace function ${f("statement_denial")}(p_state text, p_message text) returns boolean
-language sql immutable as ${body(`
+`,
+    ),
+    defineFunction(
+      "statement_denial",
+      "(p_state text, p_message text) returns boolean",
+      "sql immutable",
+      `
   select p_state = '42501' and p_message ~ ${quoteLiteral(toPostgresPattern(STATEMENT_DENIAL))}
-`)};`,
+`,
+    ),
     // ------------------------------------------------------------------------------------ keys
-    `create or replace function ${f("key_of")}(p_row jsonb, p_key_columns integer) returns jsonb
-language sql immutable as ${body(`
+    defineFunction(
+      "key_of",
+      "(p_row jsonb, p_key_columns integer) returns jsonb",
+      "sql immutable",
+      `
   select jsonb_agg(p_row -> ('k' || i) order by i) from generate_series(0, p_key_columns - 1) as i
-`)};`,
-    `create or replace function ${f("keys")}(p_rows jsonb, p_key_columns integer) returns jsonb
-language sql immutable as ${body(`
+`,
+    ),
+    defineFunction(
+      "keys",
+      "(p_rows jsonb, p_key_columns integer) returns jsonb",
+      "sql immutable",
+      `
   select coalesce(jsonb_agg(k order by k::text collate "C"), '[]'::jsonb)
     from (select distinct ${f("key_of")}(item, p_key_columns) as k
             from jsonb_array_elements(p_rows) as listed(item)) as found
-`)};`,
-    `create or replace function ${f("minus")}(p_a jsonb, p_b jsonb) returns jsonb
-language sql immutable as ${body(`
+`,
+    ),
+    defineFunction(
+      "minus",
+      "(p_a jsonb, p_b jsonb) returns jsonb",
+      "sql immutable",
+      `
   select coalesce(jsonb_agg(a.item order by a.item::text collate "C"), '[]'::jsonb)
     from jsonb_array_elements(p_a) as a(item)
    where not exists (select 1 from jsonb_array_elements(p_b) as b(item) where b.item = a.item)
-`)};`,
-    `create or replace function ${f("unite")}(p_a jsonb, p_b jsonb) returns jsonb
-language sql immutable as ${body(`
+`,
+    ),
+    defineFunction(
+      "unite",
+      "(p_a jsonb, p_b jsonb) returns jsonb",
+      "sql immutable",
+      `
   select coalesce(jsonb_agg(u.item order by u.item::text collate "C"), '[]'::jsonb)
     from (select item from jsonb_array_elements(p_a) as a(item)
           union
           select item from jsonb_array_elements(p_b) as b(item)) as u
-`)};`,
-    `create or replace function ${f("has_key")}(p_keys jsonb, p_key jsonb) returns boolean
-language sql immutable as ${body(`
+`,
+    ),
+    defineFunction(
+      "has_key",
+      "(p_keys jsonb, p_key jsonb) returns boolean",
+      "sql immutable",
+      `
   select exists (select 1 from jsonb_array_elements(p_keys) as k(item) where k.item = p_key)
-`)};`,
+`,
+    ),
     // Rows whose physical version differs, or that are gone: what a blind UPDATE touched.
-    `create or replace function ${f("touched")}(p_before jsonb, p_after jsonb, p_key_columns integer) returns jsonb
-language sql immutable as ${body(`
+    defineFunction(
+      "touched",
+      "(p_before jsonb, p_after jsonb, p_key_columns integer) returns jsonb",
+      "sql immutable",
+      `
   select ${f("keys")}(coalesce(jsonb_agg(b.item), '[]'::jsonb), p_key_columns)
     from jsonb_array_elements(p_before) as b(item)
    where not exists (
      select 1 from jsonb_array_elements(p_after) as a(item)
       where ${f("key_of")}(a.item, p_key_columns) = ${f("key_of")}(b.item, p_key_columns)
         and a.item ->> 'row_version' = b.item ->> 'row_version')
-`)};`,
+`,
+    ),
     // -------------------------------------------------------------------------------- executor
-    `create or replace function ${f("become")}(p_identity text[], p_role text) returns void
-language plpgsql as ${body(`
+    defineFunction(
+      "become",
+      "(p_identity text[], p_role text) returns void",
+      "plpgsql",
+      `
 declare
   v_statement text;
   v_who record;
@@ -202,10 +251,14 @@ begin
       v_who.row_security);
   end if;
 end
-`)};`,
+`,
+    ),
     // One statement as the persona; its rows as a jsonb array of objects.
-    `create or replace function ${f("rows")}(p_identity text[], p_role text, p_statement text, p_params text[]) returns jsonb
-language plpgsql as ${body(`
+    defineFunction(
+      "rows",
+      "(p_identity text[], p_role text, p_statement text, p_params text[]) returns jsonb",
+      "plpgsql",
+      `
 declare
   v_row record;
   v_rows jsonb[] := array[]::jsonb[];
@@ -217,10 +270,14 @@ begin
   execute ${quoteLiteral(RESET_ROLE_PROBE.inlined)};
   return to_jsonb(v_rows);
 end
-`)};`,
+`,
+    ),
     // One statement as the persona that returns no rows; how many rows it touched.
-    `create or replace function ${f("affected")}(p_identity text[], p_role text, p_statement text) returns bigint
-language plpgsql as ${body(`
+    defineFunction(
+      "affected",
+      "(p_identity text[], p_role text, p_statement text) returns bigint",
+      "plpgsql",
+      `
 declare
   v_count bigint;
 begin
@@ -230,9 +287,13 @@ begin
   execute ${quoteLiteral(RESET_ROLE_PROBE.inlined)};
   return v_count;
 end
-`)};`,
-    `create or replace function ${f("superuser_rows")}(p_statement text) returns jsonb
-language plpgsql as ${body(`
+`,
+    ),
+    defineFunction(
+      "superuser_rows",
+      "(p_statement text) returns jsonb",
+      "plpgsql",
+      `
 declare
   v_row record;
   v_rows jsonb[] := array[]::jsonb[];
@@ -248,9 +309,13 @@ exception when others then
   raise exception using errcode = 'RLT01', message = format(
     'A statement the runner sends as the superuser failed: [%s] %s', v_state, v_message);
 end
-`)};`,
-    `create or replace function ${f("superuser_exec")}(p_statements text[]) returns void
-language plpgsql as ${body(`
+`,
+    ),
+    defineFunction(
+      "superuser_exec",
+      "(p_statements text[]) returns void",
+      "plpgsql",
+      `
 declare
   v_statement text;
   v_state text;
@@ -264,10 +329,14 @@ exception when others then
   raise exception using errcode = 'RLT01', message = format(
     'A statement the runner sends as the superuser failed: [%s] %s', v_state, v_message);
 end
-`)};`,
+`,
+    ),
     // ---------------------------------------------------------------------------------- report
-    `create or replace function ${f("record")}(p_cell text, p_status text, p_line text) returns void
-language plpgsql as ${body(`
+    defineFunction(
+      "record",
+      "(p_cell text, p_status text, p_line text) returns void",
+      "plpgsql",
+      `
 declare
   v_report jsonb := current_setting(${quoteLiteral(REPORT_SETTING)})::jsonb;
   v_bucket text := 'warned';
@@ -286,11 +355,15 @@ begin
   end if;
   perform set_config(${quoteLiteral(REPORT_SETTING)}, v_report::text, false);
 end
-`)};`,
+`,
+    ),
     // Called by every cell block first. `false`: the preflight found other rows in the table than
     // the exported ones, so comparing them with the literal keys would prove nothing.
-    `create or replace function ${f("ready")}(p_table text, p_cell text) returns boolean
-language plpgsql as ${body(`
+    defineFunction(
+      "ready",
+      "(p_table text, p_cell text) returns boolean",
+      "plpgsql",
+      `
 declare
   v_report jsonb := current_setting(${quoteLiteral(REPORT_SETTING)})::jsonb;
 begin
@@ -302,10 +375,14 @@ begin
   raise notice 'not run - %: the rows of % are not the exported ones', p_cell, p_table;
   return false;
 end
-`)};`,
+`,
+    ),
     // classify.ts in SQL: leak > escape > inconclusive > overblock > pass.
-    `create or replace function ${f("judge")}(p_cell text, p_label text, p_expected jsonb, p_actual jsonb, p_inconclusive text, p_findings jsonb) returns void
-language plpgsql as ${body(`
+    defineFunction(
+      "judge",
+      "(p_cell text, p_label text, p_expected jsonb, p_actual jsonb, p_inconclusive text, p_findings jsonb) returns void",
+      "plpgsql",
+      `
 declare
   v_leaked jsonb := ${f("minus")}(p_actual, p_expected);
   v_missing jsonb := ${f("minus")}(p_expected, p_actual);
@@ -333,14 +410,18 @@ begin
     coalesce('; not measured: ' || p_inconclusive, ''),
     coalesce('; ' || v_details, '')));
 end
-`)};`,
+`,
+    ),
     // ----------------------------------------------------------------------------------- reach
     // measureVisibleReach + perRowReach + pullRow of cells.ts.
-    `create or replace function ${f("reach")}(
+    defineFunction(
+      "reach",
+      `(
   p_identity text[], p_role text, p_key_columns integer, p_bulk text, p_row_statement text,
   p_pull_statements text[], p_pull_values jsonb, p_truth jsonb, p_expected jsonb,
-  out o_actual jsonb, out o_inconclusive text, out o_state text, out o_message text)
-language plpgsql as ${body(`
+  out o_actual jsonb, out o_inconclusive text, out o_state text, out o_message text)`,
+      "plpgsql",
+      `
 declare
   v_rows jsonb;
   v_key jsonb;
@@ -425,19 +506,27 @@ begin
   end;
   o_inconclusive := v_failure;
 end
-`)};`,
+`,
+    ),
     // withBlind of cells.ts for a blind statement that failed: refused is no finding, anything
     // else makes the cell inconclusive, and an earlier reason wins.
-    `create or replace function ${f("blind_failed")}(p_inconclusive text, p_state text, p_message text) returns text
-language sql immutable as ${body(`
+    defineFunction(
+      "blind_failed",
+      "(p_inconclusive text, p_state text, p_message text) returns text",
+      "sql immutable",
+      `
   select case when ${f("blocked")}(p_state, p_message) then p_inconclusive
               else coalesce(p_inconclusive, format('[%s] %s', p_state, p_message)) end
-`)};`,
+`,
+    ),
     // ----------------------------------------------------------------------------------- cells
-    `create or replace function ${f("select_cell")}(
+    defineFunction(
+      "select_cell",
+      `(
   p_cell text, p_label text, p_identity text[], p_role text, p_key_columns integer,
-  p_expected jsonb, p_truth jsonb, p_reach text, p_count text) returns void
-language plpgsql as ${body(`
+  p_expected jsonb, p_truth jsonb, p_reach text, p_count text) returns void`,
+      "plpgsql",
+      `
 declare
   v_reach record;
   v_actual jsonb;
@@ -474,12 +563,16 @@ begin
   end if;
   perform ${f("judge")}(p_cell, p_label, p_expected, v_actual, v_inconclusive, '[]'::jsonb);
 end
-`)};`,
-    `create or replace function ${f("delete_cell")}(
+`,
+    ),
+    defineFunction(
+      "delete_cell",
+      `(
   p_cell text, p_label text, p_identity text[], p_role text, p_key_columns integer,
   p_expected jsonb, p_truth jsonb, p_reach text, p_row_statement text,
-  p_blind text, p_read_keys text) returns void
-language plpgsql as ${body(`
+  p_blind text, p_read_keys text) returns void`,
+      "plpgsql",
+      `
 declare
   v_reach record;
   v_actual jsonb;
@@ -509,17 +602,21 @@ begin
   end if;
   perform ${f("judge")}(p_cell, p_label, p_expected, v_actual, v_inconclusive, '[]'::jsonb);
 end
-`)};`,
+`,
+    ),
     // updateCell of cells.ts: visible reach with takeover, the blind UPDATE, the escape pairs.
     // p_escapes: [{"label", "values" (the moved value), "before" (keys that carry it already)}];
     // the statements of pair n are p_escape_targeted[n], p_escape_bulk[n], p_escape_read[n].
-    `create or replace function ${f("update_cell")}(
+    defineFunction(
+      "update_cell",
+      `(
   p_cell text, p_label text, p_identity text[], p_role text, p_key_columns integer,
   p_expected jsonb, p_truth jsonb, p_reach text, p_row_statement text,
   p_pull_statements text[], p_pull_values jsonb,
   p_blind_source text[], p_blind_versions text, p_blind_constants text[], p_blind_pulls text[],
-  p_escapes jsonb, p_escape_targeted text[], p_escape_bulk text[], p_escape_read text[]) returns void
-language plpgsql as ${body(`
+  p_escapes jsonb, p_escape_targeted text[], p_escape_bulk text[], p_escape_read text[]) returns void`,
+      "plpgsql",
+      `
 declare
   v_reach record;
   v_actual jsonb;
@@ -633,13 +730,17 @@ begin
   end loop;
   perform ${f("judge")}(p_cell, p_label, p_expected, v_actual, v_inconclusive, v_findings);
 end
-`)};`,
+`,
+    ),
     // insertCell of cells.ts. p_clones: [{"kind", "expected", "source"}]; clone n copies its source
     // row with p_sources[n] (then p_grant) as the superuser and inserts with p_inserts[n].
-    `create or replace function ${f("insert_cell")}(
+    defineFunction(
+      "insert_cell",
+      `(
   p_cell text, p_label text, p_identity text[], p_role text,
-  p_clones jsonb, p_sources text[], p_grant text, p_inserts text[]) returns void
-language plpgsql as ${body(`
+  p_clones jsonb, p_sources text[], p_grant text, p_inserts text[]) returns void`,
+      "plpgsql",
+      `
 declare
   v_clone jsonb;
   v_count bigint;
@@ -674,10 +775,14 @@ begin
   end loop;
   perform ${f("judge")}(p_cell, p_label, '[]'::jsonb, '[]'::jsonb, null, v_findings);
 end
-`)};`,
+`,
+    ),
     // ------------------------------------------------------------------------------- preflight
-    `create or replace function ${f("check_roles")}(p_roles text[]) returns void
-language plpgsql as ${body(`
+    defineFunction(
+      "check_roles",
+      "(p_roles text[]) returns void",
+      "plpgsql",
+      `
 declare
   v_role text;
 begin
@@ -690,11 +795,15 @@ begin
     end if;
   end loop;
 end
-`)};`,
+`,
+    ),
     // Every ordinary and partitioned table of the exposed schemas, as the runner's introspection
     // lists them. p_tables: [[schema, table], ...], the tables of the exported run.
-    `create or replace function ${f("check_tables")}(p_schemas text[], p_tables jsonb) returns void
-language plpgsql as ${body(`
+    defineFunction(
+      "check_tables",
+      "(p_schemas text[], p_tables jsonb) returns void",
+      "plpgsql",
+      `
 declare
   v_table record;
 begin
@@ -711,10 +820,14 @@ begin
       v_table.schema_name, v_table.table_name));
   end loop;
 end
-`)};`,
+`,
+    ),
     // p_volatile: what the generator knows about keys that cannot be reproduced, or null.
-    `create or replace function ${f("check_seed")}(p_table text, p_key_columns integer, p_read_keys text, p_truth jsonb, p_cells integer, p_volatile text) returns void
-language plpgsql as ${body(`
+    defineFunction(
+      "check_seed",
+      "(p_table text, p_key_columns integer, p_read_keys text, p_truth jsonb, p_cells integer, p_volatile text) returns void",
+      "plpgsql",
+      `
 declare
   v_found jsonb := ${f("keys")}(${f("superuser_rows")}(p_read_keys), p_key_columns);
   v_unknown jsonb := ${f("minus")}(v_found, p_truth);
@@ -735,7 +848,8 @@ begin
     case when p_cells = 1 then 'The 1 cell of this table was not run.'
          else format('The %s cells of this table were not run.', p_cells) end));
 end
-`)};`,
+`,
+    ),
   ];
   return functions.join("\n\n");
 }

@@ -48,7 +48,7 @@ export function privilegesOf(catalog: Pick<Catalog, "roles">, role: string): Set
   const queue = [role];
   for (let next = queue.shift(); next !== undefined; next = queue.shift()) {
     const entry = catalog.roles.find((candidate) => candidate.name === next);
-    if (entry === undefined || !entry.inherit) {
+    if (!entry?.inherit) {
       continue;
     }
     for (const group of entry.memberOf) {

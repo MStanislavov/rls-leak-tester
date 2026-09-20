@@ -14,7 +14,7 @@ export const metadata: Metadata = {
  * zod (SEC-002) and falls back to the first template. Nothing of the lab renders on the server;
  * Postgres runs in a Web Worker of this tab and no SQL is sent anywhere.
  */
-export default async function LabPage({ searchParams }: PageProps<"/lab">) {
+export default async function LabPage({ searchParams }: Readonly<PageProps<"/lab">>) {
   const entry = parseLabSearchParams(await searchParams);
   return <LabLoader entry={entry} />;
 }

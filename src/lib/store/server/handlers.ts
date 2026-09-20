@@ -56,9 +56,9 @@ export interface ScenarioApiDeps {
   readonly keys: KeyBuilder;
   readonly limiter: RateLimiter;
   readonly cache: Cache;
-  readonly fillRandom?: FillRandom | undefined;
-  readonly logger?: ((event: ScenarioLogEvent) => void) | undefined;
-  readonly now?: (() => number) | undefined;
+  readonly fillRandom?: FillRandom;
+  readonly logger?: (event: ScenarioLogEvent) => void;
+  readonly now?: () => number;
 }
 
 /** A route parameter after validation. A malformed one can name no row: it is a 404. */

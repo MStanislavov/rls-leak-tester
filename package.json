@@ -21,6 +21,9 @@
     "e2e:dev": "E2E_MODE=dev playwright test",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "sonar": "bash scripts/sonar/scan.sh",
+    "sonar:bootstrap": "bash scripts/sonar/bootstrap.sh",
+    "quality": "node scripts/quality.mjs",
     "prepare": "node scripts/hooks/install-git-hooks.mjs"
   },
   "lint-staged": {
@@ -90,5 +93,10 @@
     "esbuild": false,
     "unrs-resolver": false,
     "fsevents": false
+  },
+  "overrides": {
+    "@sonar/scan": {
+      "adm-zip": "0.6.1"
+    }
   }
 }

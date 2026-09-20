@@ -178,8 +178,11 @@ export function toConfigError(error: z.ZodError): ConfigError {
   );
 }
 
+/** A loop, not `/\/+$/`: that pattern backtracks quadratically on a long run of slashes. */
 function stripTrailingSlashes(value: string): string {
-  return value.replace(/\/+$/, "");
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") end -= 1;
+  return value.slice(0, end);
 }
 
 function toPublicConfig(values: z.infer<typeof publicSchema>): PublicConfig {

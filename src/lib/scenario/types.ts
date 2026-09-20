@@ -32,14 +32,14 @@ export interface Persona {
   /** The JWT claims, a JSON object. `sub` is the user id. */
   claims: Record<string, unknown>;
   /** Dot path into `claims`, for example `tenant_id` or `app_metadata.tenant_id`. */
-  tenantClaimPath?: string | undefined;
+  tenantClaimPath?: string;
 }
 
 export interface TableConfig {
   schema: string;
   name: string;
-  ownerColumn?: string | undefined;
-  tenantColumn?: string | undefined;
+  ownerColumn?: string;
+  tenantColumn?: string;
 }
 
 export interface Expectation {
@@ -52,7 +52,7 @@ export interface Expectation {
    * Required if and only if `scope` is `custom`. Run as superuser, returns the primary keys the
    * persona should reach; `:sub` and `:claims` are the parameters.
    */
-  expectedRowsSql?: string | undefined;
+  expectedRowsSql?: string;
 }
 
 export interface ScenarioOptions {
@@ -76,7 +76,7 @@ export interface Scenario {
   personas: Persona[];
   tables: TableConfig[];
   expectations: Expectation[];
-  options?: ScenarioOptions | undefined;
+  options?: ScenarioOptions;
 }
 
 /** What the setup pipeline needs from a scenario, and nothing more. */

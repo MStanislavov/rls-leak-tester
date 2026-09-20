@@ -17,6 +17,7 @@
  */
 import {
   bracePairs,
+  byCodeUnit,
   findImports,
   isPackage,
   isUnder,
@@ -24,6 +25,8 @@ import {
   matchingBracket,
   resolveImport,
   scanSource,
+  skipSpace,
+  skipWord,
   splitTopLevel,
 } from "./text.mjs";
 
@@ -95,8 +98,33 @@ const ROUTE_FILE = /^src\/app\/(.+\/)?route\.[cm]?[jt]sx?$/;
  */
 const SEGMENT_FILE =
   /^src\/app\/(.+\/)?(?:page|layout|template|default|icon|apple-icon|opengraph-image|twitter-image)\.[cm]?[jt]sx?$/;
-const BINARY_FILE =
-  /\.(ico|png|jpe?g|gif|webp|avif|bmp|woff2?|ttf|otf|eot|wasm|data|zip|gz|tgz|br|pdf|mp4|webm|mp3|tsbuildinfo)$/i;
+/** File extensions whose content is not text, lower case. */
+const BINARY_EXTENSIONS = new Set([
+  "ico",
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "webp",
+  "avif",
+  "bmp",
+  "woff",
+  "woff2",
+  "ttf",
+  "otf",
+  "eot",
+  "wasm",
+  "data",
+  "zip",
+  "gz",
+  "tgz",
+  "br",
+  "pdf",
+  "mp4",
+  "webm",
+  "mp3",
+  "tsbuildinfo",
+]);
 
 /** @param {string} path */
 export const isCodeFile = (path) => CODE_FILE.test(path);
@@ -111,7 +139,10 @@ export const isRouteFile = (path) => ROUTE_FILE.test(path);
 /** @param {string} path */
 export const isSegmentFile = (path) => SEGMENT_FILE.test(path);
 /** @param {string} path */
-export const isBinaryFile = (path) => BINARY_FILE.test(path);
+export const isBinaryFile = (path) => {
+  const dot = path.lastIndexOf(".");
+  return dot !== -1 && BINARY_EXTENSIONS.has(path.slice(dot + 1).toLowerCase());
+};
 /** @param {string} path */
 const isProductCode = (path) => path.startsWith("src/") && isCodeFile(path) && !isTestFile(path);
 /** @param {string} path */
@@ -191,7 +222,7 @@ function eachMatch(rule, path, text, pattern, message) {
 export function checkRouteLength(source, maxLines) {
   if (!isRouteFile(source.path)) return [];
   const lines = source.content.split("\n");
-  if (lines[lines.length - 1] === "") lines.pop();
+  if (lines.at(-1) === "") lines.pop();
   if (lines.length <= maxLines) return [];
   return [
     {
@@ -306,13 +337,66 @@ export function checkHtmlSinks(source) {
 
 /** `"use client"` as the first statement of the file: the module is a Client Component boundary. */
 const USE_CLIENT_FILE = /^\s*(["'`])use client\1/;
-/** `"use server"` as a statement, at the top of the file or of a function body: a Server Function. */
-const USE_SERVER = /(?:^|[{;\n])\s*(["'`])use server\1/;
-/** The opening bracket of the parameter list of an async function, method or arrow. */
-const ASYNC_PARAMETERS =
-  /\basync\b\s*(?:function\b\s*\*?\s*[\w$]*\s*|(?!function\b)[\w$]+\s*)?(?:<[^>()]*>\s*)?\(/g;
+const USE_SERVER_DIRECTIVE = /(["'`])use server\1/g;
 /** `async value => …`: one parameter without brackets. */
 const ASYNC_SINGLE_PARAMETER = /\basync\s+(?!function\b)[\w$]+\s*=>/;
+
+/**
+ * `"use server"` as a statement, at the top of the file or of a function body: a Server Function.
+ * A statement: nothing but white space lies between the directive and the start of the file, a
+ * `{`, a `;` or a line break. The index of the opening quote of the first one, or -1.
+ * @param {string} code
+ */
+function serverDirectiveIndex(code) {
+  for (const match of code.matchAll(USE_SERVER_DIRECTIVE)) {
+    let before = match.index - 1;
+    while (before >= 0 && code[before] !== "\n" && /\s/.test(code.charAt(before))) before -= 1;
+    if (before < 0 || "{;\n".includes(code.charAt(before))) return match.index;
+  }
+  return -1;
+}
+
+/**
+ * The index of the `(` that follows `async` at `from`, or -1: `async function* name<T>(`,
+ * `async name(` (a method), `async <T>(` and `async (` (an arrow).
+ * @param {string} code
+ * @param {number} from the index after the `async` keyword
+ */
+function asyncParameterOpen(code, from) {
+  const wordStart = skipSpace(code, from);
+  const wordEnd = skipWord(code, wordStart);
+  let i = skipSpace(code, wordEnd);
+  if (code.slice(wordStart, wordEnd) === "function") {
+    if (code.charAt(i) === "*") i = skipSpace(code, i + 1);
+    i = skipSpace(code, skipWord(code, i));
+  }
+  if (code.charAt(i) === "<") {
+    // Type parameters: up to the first `>`, and never across a bracket.
+    let end = i + 1;
+    while (end < code.length && !"()>".includes(code.charAt(end))) end += 1;
+    if (code.charAt(end) === ">") i = skipSpace(code, end + 1);
+  }
+  return code.charAt(i) === "(" ? i : -1;
+}
+
+/**
+ * The opening bracket of the parameter list of every async function, method or arrow.
+ * @param {string} code
+ * @returns {number[]}
+ */
+function asyncParameterLists(code) {
+  /** @type {number[]} */
+  const found = [];
+  let resume = 0;
+  for (const match of code.matchAll(/\basync\b/g)) {
+    const open =
+      match.index < resume ? -1 : asyncParameterOpen(code, match.index + match[0].length);
+    if (open === -1) continue;
+    found.push(open);
+    resume = open + 1;
+  }
+  return found;
+}
 
 /**
  * A Server Function is an HTTP endpoint: whoever calls it chooses every argument, a FormData
@@ -322,12 +406,10 @@ const ASYNC_SINGLE_PARAMETER = /\basync\s+(?!function\b)[\w$]+\s*=>/;
  * @param {string} code
  */
 function serverFunctionInput(code) {
-  const directive = USE_SERVER.exec(code);
-  if (directive === null) return -1;
-  const at = directive.index + directive[0].indexOf("use server") - 1;
+  const at = serverDirectiveIndex(code);
+  if (at === -1) return -1;
   if (ASYNC_SINGLE_PARAMETER.test(code)) return at;
-  for (const match of code.matchAll(ASYNC_PARAMETERS)) {
-    const open = match.index + match[0].length - 1;
+  for (const open of asyncParameterLists(code)) {
     const close = matchingBracket(code, open);
     if (close === -1 || code.slice(open + 1, close).trim() !== "") return at;
   }
@@ -342,22 +424,25 @@ const INPUT_READS = [
   // formData.get("sql"), url.searchParams.getAll("id"), Object.fromEntries(formData)
   {
     pattern:
-      /(?<![\w$])[\w$]*(?:formData|FormData|searchParams|SearchParams)\s*\.\s*(?:get|getAll|entries|values)\s*\(|\bfromEntries\s*\(\s*[\w$.]*(?:formData|FormData|searchParams|SearchParams)\b/,
+      /(?<![\w$])[\w$]*(?:formData|FormData|searchParams|SearchParams)\s*\.\s*(?:get|getAll|entries|values)\s*\(/,
+    name: "form data or query parameters",
+  },
+  {
+    pattern: /\bfromEntries\s*\(\s*[\w$.]*(?:formData|FormData|searchParams|SearchParams)\b/,
     name: "form data or query parameters",
   },
   { pattern: /\bJSON\s*\.\s*parse\s*\(/, name: "JSON.parse" },
   { pattern: /\b(?:localStorage|sessionStorage)\s*\.\s*getItem\s*\(/, name: "browser storage" },
   // request.headers.get("x"), (await headers()).get("x"), headers().get("x")
+  { pattern: /\.\s*headers\s*\.\s*get\s*\(/, name: "a request or response header" },
   {
-    pattern: /\.\s*headers\s*\.\s*get\s*\(|\bheaders\s*\(\s*\)\s*\)?\s*\.\s*get\s*\(/,
+    pattern: /\bheaders\s*\(\s*\)\s*(?:\)\s*)?\.\s*get\s*\(/,
     name: "a request or response header",
   },
   // request.cookies.get("x"), (await cookies()).get("x"), document.cookie
-  {
-    pattern:
-      /\.\s*cookies\s*\.\s*get\s*\(|\bcookies\s*\(\s*\)\s*\)?\s*\.\s*get\s*\(|\bdocument\s*\.\s*cookie\b/,
-    name: "a cookie",
-  },
+  { pattern: /\.\s*cookies\s*\.\s*get\s*\(/, name: "a cookie" },
+  { pattern: /\bcookies\s*\(\s*\)\s*(?:\)\s*)?\.\s*get\s*\(/, name: "a cookie" },
+  { pattern: /\bdocument\s*\.\s*cookie\b/, name: "a cookie" },
 ];
 /**
  * In a route handler and in a segment file (isSegmentFile) the bare words count: `params` and
@@ -367,8 +452,25 @@ const ROUTE_INPUT_READS = [
   { pattern: /\bsearchParams\b/, name: "query parameters" },
   { pattern: /\bparams\b/, name: "route parameters" },
 ];
-const ZOD_PARSE =
-  /(?<!\b(?:JSON|Date|URL|Number|path|qs|querystring)\s*)\.\s*(?:safeParse|parse|safeParseAsync|parseAsync)\s*\(/;
+const PARSE_CALL = /\.\s*(?:safeParse|parse|safeParseAsync|parseAsync)\s*\(/g;
+/** Objects whose `.parse(` is not a schema: `JSON.parse(` validates nothing. */
+const NOT_A_SCHEMA = new Set(["JSON", "Date", "URL", "Number", "path", "qs", "querystring"]);
+
+/**
+ * True when the code calls `.parse(` or `.safeParse(` (sync or async) on something that can be a
+ * zod schema.
+ * @param {string} code
+ */
+function callsSchemaParse(code) {
+  for (const match of code.matchAll(PARSE_CALL)) {
+    let end = match.index;
+    while (end > 0 && /\s/.test(code.charAt(end - 1))) end -= 1;
+    let start = end;
+    while (start > 0 && /\w/.test(code.charAt(start - 1))) start -= 1;
+    if (!NOT_A_SCHEMA.has(code.slice(start, end))) return true;
+  }
+  return false;
+}
 const VALIDATOR_NAME = /^(?:parse|validate|safeParse)(?![a-z])(?!Int$|Float$)/;
 
 /**
@@ -391,15 +493,15 @@ export function checkInputValidation(source) {
       index: serverFunction,
     });
   }
-  const hit = hits.sort((a, b) => a.index - b.index)[0];
+  const hit = hits.toSorted((a, b) => a.index - b.index)[0];
   if (hit === undefined) return [];
-  if (ZOD_PARSE.test(code)) return [];
+  if (callsSchemaParse(code)) return [];
   const callsLibValidator = source.imports.some(
     (ref) =>
       !ref.typeOnly &&
       isUnder(resolveImport(path, ref.specifier), "src/lib") &&
       ref.names.some(
-        (name) => VALIDATOR_NAME.test(name) && new RegExp(`\\b${name}\\s*\\(`).test(code),
+        (name) => VALIDATOR_NAME.test(name) && new RegExp(String.raw`\b${name}\s*\(`).test(code),
       ),
   );
   if (callsLibValidator) return [];
@@ -423,15 +525,18 @@ const SECRET_PATTERNS = [
   { name: "a Supabase secret key", pattern: /\bsb_secret_[A-Za-z0-9_-]{16,}/g },
   {
     name: "a GitHub token",
-    pattern: /\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{40,})/g,
+    pattern: /\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_\w{40,})/g,
   },
   { name: "a SonarQube token", pattern: /\bsq[upa]_[a-f0-9]{40}\b/g },
   { name: "a private key block", pattern: /-----BEGIN (?:[A-Z]+ )*PRIVATE KEY-----/g },
 ];
 const JWT = /\beyJ[A-Za-z0-9_-]{5,}\.(eyJ[A-Za-z0-9_-]{5,})\.[A-Za-z0-9_-]{5,}/g;
 const REDIS_URL_WITH_PASSWORD = /\brediss?:\/\/([^\s:@/'"`]*):([^\s@/'"`]+)@([^\s/:'"`?#]+)/g;
-const PLACEHOLDER_PASSWORD =
-  /^(?:[<[{$%].*|\*+|x+|\.+|password|passwd|pass|secret|changeme|redacted|your[-_\w]*)$/i;
+const PLACEHOLDER_WORDS = new Set(["password", "passwd", "pass", "secret", "changeme", "redacted"]);
+const PLACEHOLDER_SHAPE = /^(?:[<[{$%].*|\*+|x+|\.+|your[-\w]*)$/i;
+/** @param {string} password */
+const isPlaceholderPassword = (password) =>
+  PLACEHOLDER_WORDS.has(password.toLowerCase()) || PLACEHOLDER_SHAPE.test(password);
 /** Loopback, and the names RFC 2606 and RFC 6761 reserve: no real credential can belong to one. */
 const RESERVED_HOST =
   /^(?:127\.0\.0\.1|(?:.+\.)?(?:localhost|example|test|invalid)|(?:.+\.)?example\.(?:com|org|net))$/i;
@@ -470,7 +575,7 @@ export function checkSecrets(source) {
         : null,
     ),
     ...eachMatch("SEC-003", path, content, REDIS_URL_WITH_PASSWORD, (match) =>
-      PLACEHOLDER_PASSWORD.test(match[2] ?? "") || RESERVED_HOST.test(match[3] ?? "")
+      isPlaceholderPassword(match[2] ?? "") || RESERVED_HOST.test(match[3] ?? "")
         ? null
         : "looks like a Redis URL with a password: remove it, or use a placeholder such as <password>",
     ),
@@ -488,7 +593,7 @@ export function checkEnvExample(source) {
   /** @type {Violation[]} */
   const violations = [];
   source.content.split("\n").forEach((text, index) => {
-    const match = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/.exec(text);
+    const match = /^\s*(?:export\s+)?([A-Za-z_]\w*)\s*=(.*)$/.exec(text);
     if (match === null) return;
     const value = (match[2] ?? "").trim().replace(/^(["'])(.*)\1$/, "$2");
     if (value !== "" && !value.startsWith("#")) {
@@ -532,6 +637,18 @@ const SQL_ENGINE_PACKAGES = [
 ];
 
 /**
+ * True for an engine package and for anything under src/lib/engine.
+ * @param {string} fromPath
+ * @param {string} specifier
+ */
+function loadsSqlEngine(fromPath, specifier) {
+  return (
+    SQL_ENGINE_PACKAGES.some((name) => isPackage(specifier, name)) ||
+    isUnder(resolveImport(fromPath, specifier), "src/lib/engine")
+  );
+}
+
+/**
  * Where a value import of a Postgres engine is allowed, as an allow-list: the engine directory
  * (ENGINE_DIRS) and client-side modules, which say so with a file-level "use client". Everything
  * else under src/ is refused, and three places are refused whatever else is true: a route
@@ -548,35 +665,29 @@ const SQL_ENGINE_PACKAGES = [
 export function checkServerSqlEngines(source) {
   const { path, code } = source;
   if (!isProductCode(path)) return [];
-  const serverAction = USE_SERVER.test(code);
+  const serverAction = serverDirectiveIndex(code) !== -1;
   const serverPlace = isRouteFile(path) || SERVER_DIRS.some((dir) => isUnder(path, dir));
   const allowed =
     !serverAction &&
     !serverPlace &&
     (ENGINE_DIRS.some((dir) => isUnder(path, dir)) || USE_CLIENT_FILE.test(code));
   if (allowed) return [];
-  /** @type {Violation[]} */
-  const violations = [];
-  for (const ref of source.imports) {
-    if (ref.typeOnly) continue;
-    const engine = SQL_ENGINE_PACKAGES.find((name) => isPackage(ref.specifier, name));
-    const viaEngineDir = isUnder(resolveImport(path, ref.specifier), "src/lib/engine");
-    if (engine === undefined && !viaEngineDir) continue;
-    /** @type {string} */
-    let message;
+  /** @param {string} specifier */
+  const message = (specifier) => {
     if (serverAction) {
-      message = `a file with a "use server" directive imports ${ref.specifier}: a Server Function runs on the server, and the server never loads a Postgres engine or executes user SQL`;
-    } else if (serverPlace) {
-      message = `server code imports ${ref.specifier}: user SQL runs only in the browser, the server never loads a Postgres engine`;
-    } else {
-      message = `${ref.specifier} is imported outside the places that may load a Postgres engine (${ENGINE_DIRS.join(", ")}, a module that starts with "use client", a test): without the directive this module can run on the server. Use a type-only import, or mark the client module with "use client"`;
-      if (isUnder(path, RUNNER_DIR)) {
-        message += `. ${RUNNER_DIR} never holds an engine, because server code may import the runner: take the SqlEngine port as a parameter and let a "use client" module or the worker in src/lib/engine pass the engine in`;
-      }
+      return `a file with a "use server" directive imports ${specifier}: a Server Function runs on the server, and the server never loads a Postgres engine or executes user SQL`;
     }
-    violations.push({ rule: "SEC-004", path, line: ref.line, message });
-  }
-  return violations;
+    if (serverPlace) {
+      return `server code imports ${specifier}: user SQL runs only in the browser, the server never loads a Postgres engine`;
+    }
+    const outside = `${specifier} is imported outside the places that may load a Postgres engine (${ENGINE_DIRS.join(", ")}, a module that starts with "use client", a test): without the directive this module can run on the server. Use a type-only import, or mark the client module with "use client"`;
+    return isUnder(path, RUNNER_DIR)
+      ? `${outside}. ${RUNNER_DIR} never holds an engine, because server code may import the runner: take the SqlEngine port as a parameter and let a "use client" module or the worker in src/lib/engine pass the engine in`
+      : outside;
+  };
+  return source.imports
+    .filter((ref) => !ref.typeOnly && loadsSqlEngine(path, ref.specifier))
+    .map((ref) => ({ rule: "SEC-004", path, line: ref.line, message: message(ref.specifier) }));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -643,9 +754,9 @@ export function checkCspPolicy(source) {
   const inlineViolations = eachMatch("SEC-005", path, code, /'unsafe-inline'/g, (match) => {
     const before = [...code.slice(0, match.index ?? 0).matchAll(DIRECTIVE_TOKEN)].pop();
     const directive = before?.[1] ?? before?.[2] ?? "";
-    return /^style/i.test(directive)
-      ? null
-      : `'unsafe-inline' next to ${directive === "" ? "an unknown directive" : directive}: it is tolerated for style-src only, never for scripts`;
+    if (/^style/i.test(directive)) return null;
+    const neighbour = directive === "" ? "an unknown directive" : directive;
+    return `'unsafe-inline' next to ${neighbour}: it is tolerated for style-src only, never for scripts`;
   });
   return [...evalViolations, ...inlineViolations].sort((a, b) => a.line - b.line);
 }
@@ -721,8 +832,8 @@ export function checkBypassGuards(repo) {
 }
 
 /**
- * What switches a suite off from the inside: `.skip`, `.todo`, `.only` and friends, or no test at
- * all.
+ * What switches a suite off from the inside: `.skip`, `.only`, a placeholder test and friends, or
+ * no test at all.
  * @param {string} rule
  * @param {string} path
  * @param {string} content
@@ -792,7 +903,7 @@ export function checkTestIsolation(source) {
   );
   const remoteConstants = [...code.matchAll(URL_CONSTANT)]
     .filter((match) => !LOOPBACK_URL.test(match[2] ?? ""))
-    .map((match) => (match[1] ?? "").replace(/\$/g, String.raw`\$`));
+    .map((match) => (match[1] ?? "").replaceAll("$", String.raw`\$`));
   if (remoteConstants.length > 0) {
     const names = `(?:${[...new Set(remoteConstants)].join("|")})`;
     const constantCall = new RegExp(
@@ -875,7 +986,7 @@ export function checkNetworkGuardWired(repo) {
   } else {
     const code = scanSource(setup).code;
     for (const call of ["installNetworkGuard", "failOnBlockedAttempts"]) {
-      if (!new RegExp(`\\b${call}\\s*\\(`).test(code)) {
+      if (!new RegExp(String.raw`\b${call}\s*\(`).test(code)) {
         violations.push({
           rule: "TEST-001",
           path: NETWORK_GUARD_SETUP,
@@ -1120,90 +1231,96 @@ export function checkCoverageConfigExists(repo) {
 // REDIS-001: one key builder, every write has a TTL
 // ---------------------------------------------------------------------------------------------
 
-const REDIS_WRITE =
-  /\.\s*(set|setex|psetex|setnx|getset|mset|msetnx|hset|hmset|hsetnx|hincrby|incr|incrby|incrbyfloat|decr|decrby|append|lpush|rpush|sadd|zadd|pfadd|xadd)\s*\(/g;
+/** `.name(`: a method call. Which names write is REDIS_WRITE_COMMANDS. */
+const METHOD_CALL = /\.\s*([a-z]+)\s*\(/g;
+const REDIS_WRITE_COMMANDS = new Set([
+  "set",
+  "setex",
+  "psetex",
+  "setnx",
+  "getset",
+  "mset",
+  "msetnx",
+  "hset",
+  "hmset",
+  "hsetnx",
+  "hincrby",
+  "incr",
+  "incrby",
+  "incrbyfloat",
+  "decr",
+  "decrby",
+  "append",
+  "lpush",
+  "rpush",
+  "sadd",
+  "zadd",
+  "pfadd",
+  "xadd",
+]);
 const TTL_ARGUMENT = /["'`](?:PX|EX|PXAT|EXAT|KEEPTTL)["'`]/i;
 const EXPIRE_EVIDENCE = /p?expire(?:at)?\b/i;
 const LUA_WRITE =
   /redis\s*\.\s*p?call\s*\(\s*["'](SET|INCR|INCRBY|DECR|ZADD|HSET|HINCRBY|LPUSH|RPUSH|SADD|APPEND)["']/gi;
 
 /**
+ * ioredis is imported by the Redis directory only; a type-only import loads nothing.
  * @param {Source} source
  * @returns {Violation[]}
  */
-export function checkRedisDiscipline(source) {
-  const { path } = source;
-  const isLua = path.endsWith(".lua");
-  if (!path.startsWith("src/") || isTestFile(path) || (!isCodeFile(path) && !isLua)) return [];
-  const code = source.code;
+function ioredisOutsideRedisDir(source) {
+  return source.imports
+    .filter((ref) => isPackage(ref.specifier, "ioredis") && !ref.typeOnly)
+    .map((ref) => ({
+      rule: "REDIS-001",
+      path: source.path,
+      line: ref.line,
+      message: `ioredis imported outside ${REDIS_DIR}: use the ports, only the Redis adapters talk to the client`,
+    }));
+}
+
+/**
+ * Every write of a file that talks to ioredis carries a TTL: `.set(` in the call itself, any
+ * other command at least somewhere in the file (`hasExpire`).
+ * @param {string} path
+ * @param {string} code
+ * @param {boolean} hasExpire
+ * @returns {Violation[]}
+ */
+function writesWithoutTtl(path, code, hasExpire) {
   /** @type {Violation[]} */
   const violations = [];
-
-  if (path !== KEY_BUILDER) {
-    violations.push(
-      ...eachMatch(
-        "REDIS-001",
-        path,
-        code,
-        /rlsleak:/g,
-        () =>
-          `a literal "rlsleak:" key outside ${KEY_BUILDER}: every key comes from the key builder`,
-      ),
-    );
+  for (const match of code.matchAll(METHOD_CALL)) {
+    const command = match[1] ?? "";
+    if (!REDIS_WRITE_COMMANDS.has(command)) continue;
+    const open = match.index + match[0].length - 1;
+    const close = matchingBracket(code, open);
+    const args = close === -1 ? "" : code.slice(open, close);
+    if (command === "setex" || command === "psetex" || TTL_ARGUMENT.test(args)) continue;
+    if (command !== "set" && hasExpire) continue;
+    violations.push({
+      rule: "REDIS-001",
+      path,
+      line: lineOf(code, match.index),
+      message:
+        command === "set"
+          ? '.set( without "PX" or "EX": every Redis key has a TTL'
+          : `.${command}( in a file that never sets an expiry: every Redis key has a TTL`,
+    });
   }
+  return violations;
+}
 
-  const inRedisDir = isUnder(path, REDIS_DIR);
-  const importsIoredis = source.imports.some((ref) => isPackage(ref.specifier, "ioredis"));
-  if (!inRedisDir) {
-    for (const ref of source.imports) {
-      if (isPackage(ref.specifier, "ioredis") && !ref.typeOnly) {
-        violations.push({
-          rule: "REDIS-001",
-          path,
-          line: ref.line,
-          message: `ioredis imported outside ${REDIS_DIR}: use the ports, only the Redis adapters talk to the client`,
-        });
-      }
-    }
-    return violations;
-  }
-
-  const inAdapterDir = isUnder(path, REDIS_ADAPTER_DIR);
-  if (!inAdapterDir) {
-    violations.push(
-      ...eachMatch(
-        "REDIS-001",
-        path,
-        code,
-        REDIS_WRITE,
-        (match) =>
-          `.${match[1]}( outside ${REDIS_ADAPTER_DIR}: writes belong in an adapter, where the contract tests check the TTL`,
-      ),
-    );
-    return violations;
-  }
-
+/**
+ * What an adapter file must show: a TTL for every write, in TypeScript and in Lua.
+ * @param {Source} source
+ * @returns {Violation[]}
+ */
+function adapterTtlViolations(source) {
+  const { path, code } = source;
   const hasExpire = EXPIRE_EVIDENCE.test(code) || TTL_ARGUMENT.test(code);
-  if (importsIoredis) {
-    for (const match of code.matchAll(REDIS_WRITE)) {
-      const command = match[1] ?? "";
-      const open = match.index + match[0].length - 1;
-      const close = matchingBracket(code, open);
-      const args = close === -1 ? "" : code.slice(open, close);
-      const ttlInCall = command === "setex" || command === "psetex" || TTL_ARGUMENT.test(args);
-      if (command === "set" ? !ttlInCall : !ttlInCall && !hasExpire) {
-        violations.push({
-          rule: "REDIS-001",
-          path,
-          line: lineOf(code, match.index),
-          message:
-            command === "set"
-              ? '.set( without "PX" or "EX": every Redis key has a TTL'
-              : `.${command}( in a file that never sets an expiry: every Redis key has a TTL`,
-        });
-      }
-    }
-  }
+  const importsIoredis = source.imports.some((ref) => isPackage(ref.specifier, "ioredis"));
+  const violations = importsIoredis ? writesWithoutTtl(path, code, hasExpire) : [];
   if (!hasExpire) {
     violations.push(
       ...eachMatch(
@@ -1216,7 +1333,39 @@ export function checkRedisDiscipline(source) {
       ),
     );
   }
-  return violations.sort((a, b) => a.line - b.line);
+  return violations;
+}
+
+/**
+ * @param {Source} source
+ * @returns {Violation[]}
+ */
+export function checkRedisDiscipline(source) {
+  const { path } = source;
+  const isLua = path.endsWith(".lua");
+  if (!path.startsWith("src/") || isTestFile(path) || (!isCodeFile(path) && !isLua)) return [];
+  const code = source.code;
+  const literalKeys =
+    path === KEY_BUILDER
+      ? []
+      : eachMatch(
+          "REDIS-001",
+          path,
+          code,
+          /rlsleak:/g,
+          () =>
+            `a literal "rlsleak:" key outside ${KEY_BUILDER}: every key comes from the key builder`,
+        );
+  if (!isUnder(path, REDIS_DIR)) return [...literalKeys, ...ioredisOutsideRedisDir(source)];
+  if (!isUnder(path, REDIS_ADAPTER_DIR)) {
+    const writes = eachMatch("REDIS-001", path, code, METHOD_CALL, (match) =>
+      REDIS_WRITE_COMMANDS.has(match[1] ?? "")
+        ? `.${match[1]}( outside ${REDIS_ADAPTER_DIR}: writes belong in an adapter, where the contract tests check the TTL`
+        : null,
+    );
+    return [...literalKeys, ...writes];
+  }
+  return [...literalKeys, ...adapterTtlViolations(source)].sort((a, b) => a.line - b.line);
 }
 
 /**
@@ -1404,13 +1553,11 @@ function trimUnbalancedClosers(text) {
 }
 
 /**
- * The ignore patterns and switched-off rules of eslint.config.*. Identifiers that name an array
- * or a string constant of the same file are followed; anything else is reported as written.
- * @param {string} content
- * @returns {{ tool: string, pattern: string, line: number }[]}
+ * The `const NAME = [ … ]` and `const NAME = "…"` declarations of a file, by name: the inside of
+ * each array and the text of each string.
+ * @param {string} code
  */
-export function parseEslintConfig(content) {
-  const code = scanSource(content).code;
+function constantsOf(code) {
   /** @type {Map<string, string>} */
   const strings = new Map();
   /** @type {Map<string, string>} */
@@ -1418,14 +1565,30 @@ export function parseEslintConfig(content) {
   for (const match of code.matchAll(/\bconst\s+([\w$]+)\s*=\s*/g)) {
     const at = match.index + match[0].length;
     const first = code.charAt(at);
-    if (first === "[") {
-      const end = matchingBracket(code, at);
-      if (end !== -1) arrays.set(match[1] ?? "", code.slice(at + 1, end));
-    } else if (first === '"' || first === "'" || first === "`") {
-      const end = code.indexOf(first, at + 1);
-      if (end !== -1) strings.set(match[1] ?? "", code.slice(at + 1, end));
-    }
+    const isArray = first === "[";
+    if (!isArray && first !== '"' && first !== "'" && first !== "`") continue;
+    const end = isArray ? matchingBracket(code, at) : code.indexOf(first, at + 1);
+    if (end !== -1) (isArray ? arrays : strings).set(match[1] ?? "", code.slice(at + 1, end));
   }
+  return { strings, arrays };
+}
+
+const ESLINT_RULES_OFF = [
+  // "rule-name": "off" | 0 | ["off", …] | [0, …]
+  /(["'])(?<name>[@\w/-]+)\1\s*:\s*(?:\[\s*)?(?:(["'])off\3|0(?=\s*[,\]}\n]))/g,
+  // ruleName: "off" | ["off", …]
+  /(?<![\w$."'-])(?<name>[\w$]+)\s*:\s*(?:\[\s*)?(["'])off\2/g,
+];
+
+/**
+ * The ignore patterns and switched-off rules of eslint.config.*. Identifiers that name an array
+ * or a string constant of the same file are followed; anything else is reported as written.
+ * @param {string} content
+ * @returns {{ tool: string, pattern: string, line: number }[]}
+ */
+export function parseEslintConfig(content) {
+  const code = scanSource(content).code;
+  const { strings, arrays } = constantsOf(code);
   /**
    * @param {string} raw
    * @param {number} [depth]
@@ -1439,34 +1602,34 @@ export function parseEslintConfig(content) {
     }
     return [unquote(name).replace(/\$\{([\w$]+)\}/g, (whole, id) => strings.get(id) ?? whole)];
   };
+  /**
+   * The patterns of one `ignores:` or `globalIgnores(`: an array literal, or an expression.
+   * @param {number} at the index after the key
+   * @param {number} line
+   * @returns {{ pattern: string, line: number }[]}
+   */
+  const ignoredAt = (at, line) => {
+    if (code.charAt(at) === "[") {
+      const end = matchingBracket(code, at);
+      const block = { inner: end === -1 ? "" : code.slice(at + 1, end), start: at + 1 };
+      return arrayElements(code, block, resolve);
+    }
+    const restOfLine = /^[^\n]*/.exec(code.slice(at))?.[0] ?? "";
+    const expression = trimUnbalancedClosers(splitTopLevel(restOfLine)[0]?.text ?? "");
+    return resolve(expression).map((pattern) => ({ pattern, line }));
+  };
 
   /** @type {{ tool: string, pattern: string, line: number }[]} */
   const found = [];
   for (const match of code.matchAll(/\bglobalIgnores\s*\(\s*|(?<![\w$.])ignores\s*:\s*/g)) {
-    const at = match.index + match[0].length;
-    const line = lineOf(code, match.index);
-    if (code.charAt(at) === "[") {
-      const end = matchingBracket(code, at);
-      const block = { inner: end === -1 ? "" : code.slice(at + 1, end), start: at + 1 };
-      for (const entry of arrayElements(code, block, resolve))
-        found.push({ tool: "eslint", ...entry });
-    } else {
-      const restOfLine = /^[^\n]*/.exec(code.slice(at))?.[0] ?? "";
-      const expression = trimUnbalancedClosers(splitTopLevel(restOfLine)[0]?.text ?? "");
-      for (const pattern of resolve(expression)) found.push({ tool: "eslint", pattern, line });
-    }
+    const entries = ignoredAt(match.index + match[0].length, lineOf(code, match.index));
+    for (const entry of entries) found.push({ tool: "eslint", ...entry });
   }
-  const rulesOff = [
-    // "rule-name": "off" | 0 | ["off", …] | [0, …]
-    /(["'])([@\w/-]+)\1\s*:\s*(?:\[\s*)?(?:(["'])off\3|0(?=\s*[,\]}\n]))/g,
-    // ruleName: "off" | ["off", …]
-    /(?<![\w$."'-])()([\w$]+)\s*:\s*(?:\[\s*)?(["'])off\3/g,
-  ];
-  for (const pattern of rulesOff) {
+  for (const pattern of ESLINT_RULES_OFF) {
     for (const match of code.matchAll(pattern)) {
       found.push({
         tool: "eslint-rule-off",
-        pattern: match[2] ?? "",
+        pattern: match.groups?.name ?? "",
         line: lineOf(code, match.index),
       });
     }
@@ -1482,25 +1645,42 @@ const SONAR_EXCLUSION_KEYS = new Map([
 ]);
 
 /**
- * @param {string} content the text of sonar-project.properties
- * @returns {{ tool: string, pattern: string, line: number }[]}
+ * The `key = value` lines of a .properties file. A line that ends with a backslash continues on
+ * the next one and counts as the line it starts on; comments and blank lines are left out.
+ * @param {string} content
+ * @returns {{ key: string, value: string, line: number }[]}
  */
-export function parseSonarProperties(content) {
-  /** @type {{ tool: string, pattern: string, line: number }[]} */
+function propertiesOf(content) {
+  /** @type {{ key: string, value: string, line: number }[]} */
   const found = [];
   const lines = content.split("\n");
-  for (let index = 0; index < lines.length; index += 1) {
+  let index = 0;
+  while (index < lines.length) {
     const line = index + 1;
     let text = (lines[index] ?? "").trim();
     while (text.endsWith("\\") && index + 1 < lines.length) {
       index += 1;
       text = text.slice(0, -1) + (lines[index] ?? "").trim();
     }
-    if (text === "" || text.startsWith("#") || text.startsWith("!")) continue;
-    const match = /^([\w.-]+)\s*[=:]\s*(.*)$/.exec(text);
-    if (match === null) continue;
-    const key = match[1] ?? "";
-    const value = (match[2] ?? "").trim();
+    index += 1;
+    const key =
+      text.startsWith("#") || text.startsWith("!") ? null : /^([\w.-]+)\s*[=:]/.exec(text);
+    if (key === null) continue;
+    const value = text.slice(key[0].length).trim();
+    // As in a regular expression, where `.` stops at a line terminator: such a line is no entry.
+    if (!/[\r\u2028\u2029]/.test(value)) found.push({ key: key[1] ?? "", value, line });
+  }
+  return found;
+}
+
+/**
+ * @param {string} content the text of sonar-project.properties
+ * @returns {{ tool: string, pattern: string, line: number }[]}
+ */
+export function parseSonarProperties(content) {
+  /** @type {{ tool: string, pattern: string, line: number }[]} */
+  const found = [];
+  for (const { key, value, line } of propertiesOf(content)) {
     const tool = SONAR_EXCLUSION_KEYS.get(key);
     if (tool !== undefined) {
       for (const pattern of value.split(",").map((part) => part.trim())) {
@@ -1690,27 +1870,47 @@ const HARMLESS_VITEST_FLAG =
  */
 export function checkGovernedLintRules(source) {
   const { path, content } = source;
-  if (ESLINT_CONFIGS.includes(path)) {
-    const names = GOVERNED_ESLINT_RULES.map((name) => name.replace(/[/\\^$*+?.()|[\]{}]/g, "\\$&"));
-    const weakened = new RegExp(
-      `(["'\`])(${names.join("|")})\\1\\s*:\\s*(?:\\[\\s*)?(?:(["'\`])(off|warn)\\3|([01])(?=\\s*[,\\]}\\n]))`,
-      "g",
-    );
-    const downgraded = eachMatch("QUAL-002", path, source.code, weakened, (match) => {
-      const level = match[4] ?? (match[5] === "0" ? "off" : "warn");
-      return `${match[2]} is set to "${level}": it enforces a rule of rules.yaml and stays "error" in every scope`;
-    });
-    return [...downgraded, ...checkGovernedBlocks(path, source.code, names)].sort(
-      (a, b) => a.line - b.line,
-    );
-  }
+  if (ESLINT_CONFIGS.includes(path)) return checkGovernedRuleLevels(path, source.code);
   if (path !== PACKAGE_JSON) return [];
   const manifest = readManifest(content);
   if (manifest === null) {
     return [{ rule: "QUAL-002", path, line: 1, message: "package.json cannot be parsed" }];
   }
-  /** @param {string} text */
-  const lineOfText = (text) => lineOfJsonText(content, text);
+  return [
+    ...checkLintScripts(path, content, manifest),
+    ...checkTestScripts(path, content, manifest),
+  ];
+}
+
+/**
+ * No governed rule is set to "off" or "warn", and each one sits in its named block.
+ * @param {string} path
+ * @param {string} code the configuration without comments
+ * @returns {Violation[]}
+ */
+function checkGovernedRuleLevels(path, code) {
+  const names = GOVERNED_ESLINT_RULES.map((name) =>
+    name.replace(/[/\\^$*+?.()|[\]{}]/g, String.raw`\$&`),
+  );
+  const weakened = new RegExp(
+    `(["'\`])(${names.join("|")})\\1\\s*:\\s*(?:\\[\\s*)?(?:(["'\`])(off|warn)\\3|([01])(?=\\s*[,\\]}\\n]))`,
+    "g",
+  );
+  const downgraded = eachMatch("QUAL-002", path, code, weakened, (match) => {
+    const level = match[4] ?? (match[5] === "0" ? "off" : "warn");
+    return `${match[2]} is set to "${level}": it enforces a rule of rules.yaml and stays "error" in every scope`;
+  });
+  return [...downgraded, ...checkGovernedBlocks(path, code, names)].sort((a, b) => a.line - b.line);
+}
+
+/**
+ * `npm run lint` runs ESLint, and every command that runs ESLint fails on a warning.
+ * @param {string} path
+ * @param {string} content the text of package.json
+ * @param {Manifest} manifest
+ * @returns {Violation[]}
+ */
+function checkLintScripts(path, content, manifest) {
   /** @type {Violation[]} */
   const violations = [];
   const lint = manifest.scripts?.lint;
@@ -1723,17 +1923,31 @@ export function checkGovernedLintRules(source) {
     });
   }
   for (const command of manifestCommands(manifest)) {
-    for (const part of command.split(/&&|\|\||;/)) {
-      if (/^\s*(?:npx\s+)?eslint\b/.test(part) && !MAX_WARNINGS_ZERO.test(part)) {
-        violations.push({
-          rule: "QUAL-002",
-          path,
-          line: lineOfText(command),
-          message: `"${part.trim()}" runs ESLint without --max-warnings 0: a rule downgraded to a warning would pass`,
-        });
-      }
+    const lenient = command
+      .split(/&&|\|\||;/)
+      .filter((part) => /^\s*(?:npx\s+)?eslint\b/.test(part) && !MAX_WARNINGS_ZERO.test(part));
+    for (const part of lenient) {
+      violations.push({
+        rule: "QUAL-002",
+        path,
+        line: lineOfJsonText(content, command),
+        message: `"${part.trim()}" runs ESLint without --max-warnings 0: a rule downgraded to a warning would pass`,
+      });
     }
   }
+  return violations;
+}
+
+/**
+ * The npm scripts that run the suites run all of them: `vitest run` plus reporting flags.
+ * @param {string} path
+ * @param {string} content the text of package.json
+ * @param {Manifest} manifest
+ * @returns {Violation[]}
+ */
+function checkTestScripts(path, content, manifest) {
+  /** @type {Violation[]} */
+  const violations = [];
   for (const { name, command, needs } of TEST_SCRIPTS) {
     const script = manifest.scripts?.[name];
     const wanted = needs === null ? "vitest run" : `vitest run ${needs}`;
@@ -1747,19 +1961,52 @@ export function checkGovernedLintRules(source) {
       continue;
     }
     // Leading NAME=value pairs are the environment of the command, not the command.
-    const bare = script.trim().replace(/^(?:[A-Za-z_][\w]*=\S*\s+)+/, "");
+    const bare = script.trim().replace(/^(?:[A-Za-z_]\w*=\S*\s+)+/, "");
     const flags = bare.replace(command, "").trim().split(/\s+/).filter(Boolean);
     const narrowing = flags.filter((flag) => !HARMLESS_VITEST_FLAG.test(flag));
     if (!command.test(bare) || narrowing.length > 0 || (needs !== null && !flags.includes(needs))) {
       violations.push({
         rule: "QUAL-002",
         path,
-        line: lineOfText(script),
+        line: lineOfJsonText(content, script),
         message: `scripts.${name} is "${script}": it must be "${wanted}" plus reporting flags at most. A file filter, --exclude, --dir, --config, --project, -t or a --coverage.* override decides which suites run and what they must reach, and that is the job of vitest.config, where the rules check reads it`,
       });
     }
   }
   return violations;
+}
+
+/**
+ * @typedef {{ name: string, index: number, open: number, close: number }} NamedBlock a `{…}` of
+ *   the configuration that holds `name: "rules/…"`
+ * @typedef {{ rule: string, index: number }} RuleKey where a governed rule is set
+ */
+
+/**
+ * @param {NamedBlock} block
+ * @param {RuleKey} key
+ */
+const blockHolds = (block, key) => block.open < key.index && key.index < block.close;
+
+/**
+ * Every `{ name: "rules/…", … }` block of the configuration.
+ * @param {string} code
+ * @returns {NamedBlock[]}
+ */
+function namedBlocksOf(code) {
+  const pairs = bracePairs(code);
+  /** The innermost `{…}` around an index. @param {number} index */
+  const enclosing = (index) =>
+    pairs.filter(([open, close]) => open < index && index < close).sort((a, b) => b[0] - a[0])[0];
+  /** @type {NamedBlock[]} */
+  const named = [];
+  for (const match of code.matchAll(/(?<![\w$.])name\s*:\s*(["'`])(rules\/[\w-]+)\1/g)) {
+    const block = enclosing(match.index);
+    if (block !== undefined) {
+      named.push({ name: match[2] ?? "", index: match.index, open: block[0], close: block[1] });
+    }
+  }
+  return named;
 }
 
 /**
@@ -1771,23 +2018,13 @@ export function checkGovernedLintRules(source) {
  */
 function checkGovernedBlocks(path, code, names) {
   const ruleKey = new RegExp(`(["'\`])(${names.join("|")})\\1\\s*:`, "g");
+  /** @type {RuleKey[]} */
   const keys = [...code.matchAll(ruleKey)].map((match) => ({
     rule: match[2] ?? "",
     index: match.index,
   }));
   if (keys.length === 0) return []; // a configuration without governed rules: nothing to guard yet
-  const pairs = bracePairs(code);
-  /** The innermost `{…}` around an index. @param {number} index */
-  const enclosing = (index) =>
-    pairs.filter(([open, close]) => open < index && index < close).sort((a, b) => b[0] - a[0])[0];
-  /** @type {{ name: string, index: number, open: number, close: number }[]} */
-  const named = [];
-  for (const match of code.matchAll(/(?<![\w$.])name\s*:\s*(["'`])(rules\/[\w-]+)\1/g)) {
-    const block = enclosing(match.index);
-    if (block !== undefined) {
-      named.push({ name: match[2] ?? "", index: match.index, open: block[0], close: block[1] });
-    }
-  }
+  const named = namedBlocksOf(code);
   /** @type {Violation[]} */
   const violations = [];
   /** @param {number} index @param {string} message */
@@ -1795,44 +2032,38 @@ function checkGovernedBlocks(path, code, names) {
     violations.push({ rule: "QUAL-002", path, line: lineOf(code, index), message });
 
   for (const [name, rules] of Object.entries(GOVERNED_ESLINT_BLOCKS)) {
-    const found = named.filter((block) => block.name === name);
-    if (found.length === 0) {
+    const [block, ...extras] = named.filter((candidate) => candidate.name === name);
+    if (block === undefined) {
       report(0, `the block named "${name}" is missing: it sets ${rules.join(", ")}`);
+      continue;
     }
-    for (const extra of found.slice(1)) {
+    for (const extra of extras) {
       report(
         extra.index,
         `a second block is named "${name}": flat config lets the later one replace the rule options of the first`,
       );
     }
-    const block = found[0];
-    if (block === undefined) continue;
-    for (const rule of rules) {
-      if (
-        !keys.some((key) => key.rule === rule && block.open < key.index && key.index < block.close)
-      ) {
-        report(block.index, `the block "${name}" no longer sets ${rule}`);
-      }
-    }
+    const unset = rules.filter(
+      (rule) => !keys.some((key) => key.rule === rule && blockHolds(block, key)),
+    );
+    for (const rule of unset) report(block.index, `the block "${name}" no longer sets ${rule}`);
   }
   // Only the first block of a name is a home: a second one is the override this check exists for.
   const homes = Object.keys(GOVERNED_ESLINT_BLOCKS).flatMap((name) => {
     const first = named.find((block) => block.name === name);
     return first === undefined ? [] : [first];
   });
-  for (const key of keys) {
-    const home = homes.find(
+  /** @param {RuleKey} key */
+  const isAtHome = (key) =>
+    homes.some(
       (block) =>
-        block.open < key.index &&
-        key.index < block.close &&
-        (GOVERNED_ESLINT_BLOCKS[block.name] ?? []).includes(key.rule),
+        blockHolds(block, key) && (GOVERNED_ESLINT_BLOCKS[block.name] ?? []).includes(key.rule),
     );
-    if (home === undefined) {
-      report(
-        key.index,
-        `${key.rule} is set outside the named blocks (${Object.keys(GOVERNED_ESLINT_BLOCKS).join(", ")}): flat config replaces rule options instead of merging them, so this block silently drops every ban of rules.yaml for the files it matches. Add the selector or the path to the shared lists the named blocks are composed from`,
-      );
-    }
+  for (const key of keys.filter((candidate) => !isAtHome(candidate))) {
+    report(
+      key.index,
+      `${key.rule} is set outside the named blocks (${Object.keys(GOVERNED_ESLINT_BLOCKS).join(", ")}): flat config replaces rule options instead of merging them, so this block silently drops every ban of rules.yaml for the files it matches. Add the selector or the path to the shared lists the named blocks are composed from`,
+    );
   }
   return violations;
 }
@@ -1842,6 +2073,28 @@ function checkGovernedBlocks(path, code, names) {
 // ---------------------------------------------------------------------------------------------
 
 /**
+ * The regular expression source of the glob token at `i`, and how many characters it takes.
+ * @param {string} glob
+ * @param {number} i
+ * @param {boolean} inBraces inside a `{a,b}` group
+ * @returns {{ source: string, length: number, braces?: 1 | -1 }}
+ */
+function globToken(glob, i, inBraces) {
+  const ch = glob.charAt(i);
+  if (ch === "*" && glob.charAt(i + 1) === "*") {
+    return glob.charAt(i + 2) === "/"
+      ? { source: "(?:.*/)?", length: 3 }
+      : { source: ".*", length: 2 };
+  }
+  if (ch === "*") return { source: "[^/]*", length: 1 };
+  if (ch === "?") return { source: "[^/]", length: 1 };
+  if (ch === "{" && glob.includes("}", i)) return { source: "(?:", length: 1, braces: 1 };
+  if (ch === "}" && inBraces) return { source: ")", length: 1, braces: -1 };
+  if (ch === "," && inBraces) return { source: "|", length: 1 };
+  return { source: ch.replace(/[\\^$+.()|[\]{}]/g, String.raw`\$&`), length: 1 };
+}
+
+/**
  * A small glob matcher for `test.exclude` patterns: `**`, `*`, `?` and `{a,b}`.
  * @param {string} rawGlob
  */
@@ -1849,26 +2102,12 @@ function globToRegExp(rawGlob) {
   const glob = rawGlob.replace(/^\.\//, "");
   let pattern = "";
   let braces = 0;
-  for (let i = 0; i < glob.length; i += 1) {
-    const ch = glob.charAt(i);
-    if (ch === "*" && glob.charAt(i + 1) === "*") {
-      pattern += glob.charAt(i + 2) === "/" ? "(?:.*/)?" : ".*";
-      i += glob.charAt(i + 2) === "/" ? 2 : 1;
-    } else if (ch === "*") {
-      pattern += "[^/]*";
-    } else if (ch === "?") {
-      pattern += "[^/]";
-    } else if (ch === "{" && glob.includes("}", i)) {
-      braces += 1;
-      pattern += "(?:";
-    } else if (ch === "}" && braces > 0) {
-      braces -= 1;
-      pattern += ")";
-    } else if (ch === "," && braces > 0) {
-      pattern += "|";
-    } else {
-      pattern += ch.replace(/[\\^$+.()|[\]{}]/g, "\\$&");
-    }
+  let i = 0;
+  while (i < glob.length) {
+    const token = globToken(glob, i, braces > 0);
+    pattern += token.source;
+    braces += token.braces ?? 0;
+    i += token.length;
   }
   return new RegExp(`^${pattern}$`);
 }
@@ -1885,9 +2124,9 @@ export function checkGuardSuites(repo) {
   /** @type {Violation[]} */
   const violations = [];
   const config = parseVitestConfig(repo.read(configPath) ?? "");
-  const included = config.testInclude.map((entry) => entry.pattern.replace(/^\.\//, ""));
+  const included = new Set(config.testInclude.map((entry) => entry.pattern.replace(/^\.\//, "")));
   for (const pattern of REQUIRED_TEST_INCLUDES) {
-    if (!included.includes(pattern)) {
+    if (!included.has(pattern)) {
       violations.push({
         rule: "QUAL-002",
         path: configPath,
@@ -2010,4 +2249,4 @@ export const GIT_CHECK_RULE = "SEC-003";
 /** Every rule id this script can enforce. rules.yaml must mark exactly these as script-enforced. */
 export const IMPLEMENTED_RULES = [
   ...new Set([...FILE_CHECKS, ...REPO_CHECKS].map((check) => check.rule)),
-].sort();
+].sort(byCodeUnit);

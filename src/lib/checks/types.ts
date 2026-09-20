@@ -3,7 +3,7 @@
  * the catalog, never a verdict: verdicts come from the matrix (rules.yaml P1). Everything here is
  * plain data, so a finding list can be serialised, diffed and rendered as text.
  */
-import type { Scenario } from "@/lib/scenario";
+import type { Scenario, ScenarioOptions } from "@/lib/scenario";
 
 export const CHECK_IDS = [
   "RLS001",
@@ -77,5 +77,5 @@ export interface StaticCheckRule {
  */
 export type StaticCheckContext = Pick<Scenario, "mode"> & {
   readonly personas: readonly { readonly dbRole: string }[];
-  readonly options?: Scenario["options"];
+  readonly options?: ScenarioOptions;
 };

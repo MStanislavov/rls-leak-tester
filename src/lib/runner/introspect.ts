@@ -302,13 +302,13 @@ join pg_roles g on g.oid = am.roleid
 where m.rolname !~ '^pg_'
 order by m.rolname collate "C", g.rolname collate "C"`;
 
-const VIEWS_SQL = `
+const VIEWS_SQL = String.raw`
 select n.nspname::text as schema, c.relname::text as name, o.rolname::text as owner,
        (c.relkind = 'm') as materialized, pg_get_viewdef(c.oid, true) as definition,
        coalesce((
          select lower(split_part(opt, '=', 2)) in ('true', 'on', '1', 'yes')
          from unnest(c.reloptions) as opt
-         where opt like 'security\\_invoker=%'
+         where opt like 'security\_invoker=%'
          limit 1
        ), false) as security_invoker
 from pg_class c
@@ -332,13 +332,13 @@ group by vn.nspname, v.relname, tn.nspname, t.relname, t.relkind
 order by vn.nspname collate "C", v.relname collate "C",
          tn.nspname collate "C", t.relname collate "C"`;
 
-const FUNCTIONS_SQL = `
+const FUNCTIONS_SQL = String.raw`
 select n.nspname::text as schema, p.proname::text as name,
        pg_get_function_identity_arguments(p.oid) as identity_arguments,
        p.prokind::text as kind, o.rolname::text as owner, l.lanname::text as language,
        p.prosecdef as security_definer,
        (select substring(cfg from 13) from unnest(p.proconfig) as cfg
-        where cfg like 'search\\_path=%' limit 1) as search_path
+        where cfg like 'search\_path=%' limit 1) as search_path
 from pg_proc p
 join pg_namespace n on n.oid = p.pronamespace
 join pg_roles o on o.oid = p.proowner

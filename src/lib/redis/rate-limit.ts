@@ -10,7 +10,7 @@ export interface RateLimitSubject {
   /** The caller's address. Hashed before it becomes part of a key. */
   readonly ip: string;
   /** The signed-in user, when there is one. */
-  readonly userId?: string | undefined;
+  readonly userId?: string;
 }
 
 /**

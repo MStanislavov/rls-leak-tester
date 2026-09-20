@@ -34,8 +34,13 @@ export type DatabaseFactory = () => Promise<WorkerDatabase>;
 
 export type RequestHandler = (request: WorkerRequest) => Promise<WorkerResponse>;
 
+/** JSON has no bigint: it travels as its decimal text. */
+function bigintAsText(_key: string, inner: unknown): unknown {
+  return typeof inner === "bigint" ? inner.toString() : inner;
+}
+
 function toHex(bytes: Uint8Array): string {
-  let hex = "\\x";
+  let hex = String.raw`\x`;
   for (const byte of bytes) {
     hex += byte.toString(16).padStart(2, "0");
   }
@@ -64,13 +69,26 @@ export function toCell(value: unknown): SqlCell {
   if (value instanceof Uint8Array) {
     return toHex(value);
   }
-  return JSON.stringify(value, (_key, inner: unknown) =>
-    typeof inner === "bigint" ? inner.toString() : inner,
-  );
+  return JSON.stringify(value, bigintAsText);
 }
 
 function stringOrNull(value: unknown): string | null {
   return typeof value === "string" ? value : null;
+}
+
+/**
+ * The message for a thrown object that carries none. `String` would only say "[object Object]",
+ * so its data is shown as JSON; what JSON cannot express (a cycle, a `toJSON` that returns
+ * nothing) falls back to the object's tag.
+ */
+function describeThrownObject(value: object): string {
+  let json: unknown;
+  try {
+    json = JSON.stringify(value, bigintAsText);
+  } catch {
+    json = undefined;
+  }
+  return typeof json === "string" ? json : Object.prototype.toString.call(value);
 }
 
 /** Maps a thrown value to plain data. PGlite's `DatabaseError` carries `code`. */
@@ -78,7 +96,7 @@ export function toErrorInfo(error: unknown): SqlErrorInfo {
   if (typeof error === "object" && error !== null) {
     const fields = error as Record<string, unknown>;
     return {
-      message: typeof fields.message === "string" ? fields.message : String(error),
+      message: typeof fields.message === "string" ? fields.message : describeThrownObject(error),
       code: stringOrNull(fields.code),
       detail: stringOrNull(fields.detail),
       hint: stringOrNull(fields.hint),

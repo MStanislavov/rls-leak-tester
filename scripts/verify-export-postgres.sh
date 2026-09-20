@@ -104,18 +104,30 @@ for folder in "$OUT"/*/; do
   status=0
   run_files "$database" "/exports/$scenario/rls-isolation.test.sql" >"$OUT/$scenario.log" 2>&1 || status=$?
   # The last statement's exception: a summary line, then one line per preflight problem and per
-  # failed cell. A preflight line is cut after its subject, a cell line after the cell id.
+  # failed cell. Each of those lines is replaced by the expected line it BEGINS with (the longest
+  # one, followed by a space). No character ends a cell id: a quoted table name may hold a space
+  # or a parenthesis, so the line is never cut at one. A line nobody expected is kept whole and
+  # shows up in the diff.
   sed -n '/ERROR:  /,$p' "$OUT/$scenario.log" | cut -c 1-260
-  sed -n '/ERROR:  /,$p' "$OUT/$scenario.log" |
-    sed -n -E -e 's/^(\[setup\] the (table|rows of|role) [^ ]+) .*/\1/p' -e t \
-      -e 's/^(\[[a-z]+\] [^ ]+) .*/\1/p' | LC_ALL=C sort >"$OUT/$scenario.actual"
+  sed -n '/ERROR:  /,$p' "$OUT/$scenario.log" | grep -E '^\[[a-z]+\] ' |
+    awk -v expected="${folder}expected.txt" '
+      BEGIN { while ((getline line < expected) > 0) if (line != "") known[line] = 1 }
+      {
+        best = ""
+        for (line in known) if (index($0, line " ") == 1 && length(line) > length(best)) best = line
+        print (best == "" ? $0 : best)
+      }' | LC_ALL=C sort >"$OUT/$scenario.actual" || true
   echo "-- cells reported ok: $(grep -c 'NOTICE:  ok - ' "$OUT/$scenario.log" || true), psql exit status $status"
 
   # Roles are cluster-wide; a CI job has one database and creates them once.
   admin "drop database $database"
-  for role in $(admin "select rolname from pg_roles where rolname !~ '^pg_' and rolname <> 'postgres'"); do
-    admin "drop role \"$role\""
-  done
+  # One name per line: a role name may hold a space ("app user").
+  admin "select rolname from pg_roles where rolname !~ '^pg_' and rolname <> 'postgres'" >"$OUT/$scenario.roles"
+  while IFS= read -r role; do
+    if [ -n "$role" ]; then
+      admin "drop role \"$role\""
+    fi
+  done <"$OUT/$scenario.roles"
 
   if [ -s "${folder}expected.txt" ]; then expected=3; else expected=0; fi
   if [ "$status" -ne "$expected" ]; then

@@ -1,4 +1,4 @@
-# ADR (draft): design of the matrix runner
+# ADR: design of the matrix runner
 
 - Status: proposed (draft, numbered by the orchestrator)
 - Date: 2026-09-19

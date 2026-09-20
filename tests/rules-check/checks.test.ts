@@ -434,6 +434,21 @@ describe("SEC-002 external input is validated with zod", () => {
       expect(checkInputValidation(source("src/components/lab/actions.ts", single))).toHaveLength(1);
     });
 
+    it.each([
+      ["a generic function", "export async function save<T extends object>(input: T) {}"],
+      ["a generic arrow", "export const save = async <T,>(input: T) => saveScenario(input);"],
+      ["an async generator", "export async function* rows(input: string) {}"],
+      ["an async method", "export const actions = { async save(input: string) {} };"],
+    ])("sees the parameters of %s", (_, declaration) => {
+      const action = lines('"use server";', declaration);
+      expect(summarize(checkInputValidation(source(ACTIONS, action)))).toEqual([
+        `SEC-002 ${ACTIONS}:1`,
+      ]);
+      const empty = action.replace(/\(input: \w+\)/, "()");
+      expect(empty).not.toBe(action);
+      expect(checkInputValidation(source(ACTIONS, empty))).toEqual([]);
+    });
+
     it("fails a function-level directive, wherever the file lives", () => {
       const inline = lines(
         'import { saveScenario } from "@/lib/store/scenarios";',

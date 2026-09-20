@@ -1,4 +1,4 @@
-# ADR (draft): the SqlEngine port, the PGlite adapters, setup, introspection and ground truth
+# ADR: the SqlEngine port, the PGlite adapters, setup, introspection and ground truth
 
 - Status: draft, to be numbered by the orchestrator
 - Date: 2026-09-19

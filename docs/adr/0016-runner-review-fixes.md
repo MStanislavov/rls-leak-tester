@@ -1,4 +1,4 @@
-# ADR (draft): wrong verdicts found by three reviews of the core library, and how they were closed
+# ADR: wrong verdicts found by three reviews of the core library, and how they were closed
 
 - Status: proposed (draft, numbered by the orchestrator)
 - Date: 2026-09-20

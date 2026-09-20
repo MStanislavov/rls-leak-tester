@@ -16,7 +16,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createPgliteEngine } from "@/lib/engine/pglite-engine";
 import { CI_EXPORT_FILE_NAMES } from "@/lib/export";
 import type { SqlEngine } from "@/lib/runner/types";
-import { compareText, splitSqlStatements, type Scenario } from "@/lib/scenario";
+import { OPERATIONS, compareText, splitSqlStatements, type Scenario } from "@/lib/scenario";
 import { OWN_SCENARIOS_TABLE, type TemplateVariant } from "@/lib/scenario/templates";
 import {
   ALICE_SLUGS,
@@ -111,10 +111,15 @@ function declared(variant: TemplateVariant): string[] {
     .sort(compareText);
 }
 
+/** Both variants of the template have the same cells, so one list of ids reads every exception. */
+const CELL_IDS = OWN_SCENARIOS_TABLE.fixed.scenario.personas.flatMap((persona) =>
+  OPERATIONS.map((operation) => `${persona.id}|public.scenarios|${operation}`),
+);
+
 function reported(outcome: TestFileOutcome): string[] {
   return outcome.passed
     ? []
-    : failedCells(outcome.error)
+    : failedCells(outcome.error, CELL_IDS)
         .map((cell) => `${cell.status} ${cell.id}`)
         .sort(compareText);
 }
@@ -166,7 +171,7 @@ describe("self-isolation proof: the exported check against supabase/migrations",
       if (!broken.outcome.passed) {
         expect(broken.outcome.error.code).toBe("P0001");
         // The unlisted rows are named as the evidence: anon lists both of them.
-        const anonLine = failedCells(broken.outcome.error).find(
+        const anonLine = failedCells(broken.outcome.error, CELL_IDS).find(
           (cell) => cell.id === "anon|public.scenarios|select",
         );
         for (const id of UNLISTED_SCENARIO_IDS) {

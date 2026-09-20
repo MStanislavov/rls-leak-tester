@@ -428,6 +428,10 @@ describe("offsetToPosition", () => {
     expect(offsetToPosition("", 0)).toEqual({ line: 1, column: 1 });
   });
 
+  it("counts a lone carriage return at the very end of the script as a line break", () => {
+    expect(offsetToPosition("ab\r", 3)).toEqual({ line: 2, column: 1 });
+  });
+
   it("places a Postgres error position inside a statement", () => {
     const script = "select 1;\nselect *\n  from missing_table;";
     const statement = splitSqlStatements(script)[1];

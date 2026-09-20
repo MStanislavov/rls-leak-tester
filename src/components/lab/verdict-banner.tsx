@@ -40,6 +40,18 @@ function Progress({ run }: { readonly run: RunState }) {
   );
 }
 
+/** What the run cost, as the tail of the "N cells" sentence; empty before there are timings. */
+function timingsText(timings: MatrixTimings | null): string {
+  if (timings === null) {
+    return "";
+  }
+  const total = `, ${seconds(timings.totalMs)} in total, ${seconds(timings.setupMs)} of it setup`;
+  const times = timings.rebuilds === 1 ? "time" : "times";
+  const rebuilt =
+    timings.rebuilds > 0 ? `, database rebuilt ${timings.rebuilds} ${times} after a timeout` : "";
+  return `${total}${rebuilt}`;
+}
+
 function Verdict({
   result,
   timings,
@@ -88,13 +100,7 @@ function Verdict({
       <p className="text-sm text-muted-foreground">{view.description}</p>
       <p className="text-xs text-muted-foreground">
         {view.totalCells} cells
-        {timings === null
-          ? ""
-          : `, ${seconds(timings.totalMs)} in total, ${seconds(timings.setupMs)} of it setup`}
-        {timings !== null && timings.rebuilds > 0
-          ? `, database rebuilt ${timings.rebuilds} time${timings.rebuilds === 1 ? "" : "s"} after a timeout`
-          : ""}
-        . Every status comes from executed SQL and compared row sets.
+        {timingsText(timings)}. Every status comes from executed SQL and compared row sets.
       </p>
       {stale ? (
         <p

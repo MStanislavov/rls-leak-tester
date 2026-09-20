@@ -8,6 +8,7 @@
  */
 import { Download, FileCode2, Play } from "lucide-react";
 import { useMemo, useState } from "react";
+import { CodeListing } from "@/components/site/scroll-region";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -62,15 +63,13 @@ function FilePanel({ file }: { readonly file: CiExportFile }) {
           </Button>
         </div>
       </div>
-      <pre
-        tabIndex={0}
-        role="group"
-        aria-label={`${file.name}, read-only`}
-        data-testid={`export-ci-preview-${file.name}`}
+      <CodeListing
+        label={`${file.name}, read-only`}
+        testId={`export-ci-preview-${file.name}`}
         className="h-72 overflow-auto rounded-md border bg-muted p-2 font-mono text-xs whitespace-pre"
       >
         {file.content}
-      </pre>
+      </CodeListing>
     </div>
   );
 }
@@ -272,7 +271,7 @@ export function ExportCiCheck({
             </p>
           ) : null}
 
-          {exported !== null && exported.ok ? <ExportFiles view={exported.view} /> : null}
+          {exported?.ok ? <ExportFiles view={exported.view} /> : null}
         </DialogContent>
       </Dialog>
     </>

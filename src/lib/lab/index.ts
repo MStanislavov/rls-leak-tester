@@ -93,13 +93,16 @@ export type { VerdictCount, VerdictView } from "./verdict-view";
 
 export {
   KEY_LIST_CAP,
+  TIMED_OUT_LABEL,
   buildCellKeyLists,
   buildKeyList,
   buildSubProbeViews,
+  cellStatusView,
+  cellTimeout,
   cellTranscript,
   formatKey,
 } from "./cell-view";
-export type { CellKeyLists, KeyListView, SubProbeView } from "./cell-view";
+export type { CellKeyLists, CellStatusView, KeyListView, SubProbeView } from "./cell-view";
 
 export { buildTablesView } from "./tables-view";
 export type {

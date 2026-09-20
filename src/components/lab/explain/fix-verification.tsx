@@ -7,6 +7,7 @@
  */
 import { CircleCheck, CircleX, FlaskConical, Hourglass, type LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
+import { CodeListing } from "@/components/site/scroll-region";
 import { fixLabelOf, type VerificationState } from "@/lib/lab/explain-state";
 import {
   cellChangeText,
@@ -141,7 +142,7 @@ export function FixOutcome({ outcome }: { readonly outcome: FixVerification }) {
           <span data-testid="fix-verdict-after" className="font-mono font-semibold">
             {outcome.verdictAfter}
           </span>
-          .
+          {"."}
         </p>
         <ChangeList title="Fixed" changes={outcome.fixed} testId="fix-fixed" />
         <ChangeList
@@ -182,14 +183,12 @@ export function FixOutcome({ outcome }: { readonly outcome: FixVerification }) {
               {setupError.sqlState === null ? "" : `SQLSTATE ${setupError.sqlState} `}
               {setupError.message}
             </p>
-            <pre
-              tabIndex={0}
-              role="group"
-              aria-label="The statement that failed"
+            <CodeListing
+              label="The statement that failed"
               className="mt-2 max-h-32 overflow-auto rounded-md border bg-background p-2 font-mono text-xs whitespace-pre-wrap"
             >
               {setupError.statement}
-            </pre>
+            </CodeListing>
           </div>
         )}
         <ChangeList

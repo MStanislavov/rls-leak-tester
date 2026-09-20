@@ -30,7 +30,6 @@ export const COMMIT_TYPES = [
 export const SUBJECT_PATTERN = new RegExp(
   String.raw`^(${COMMIT_TYPES.join("|")})(\([\w./-]+\))?!?: \S.*$`,
 );
-const MERGE_PATTERN = /^Merge /;
 
 /**
  * @param {string} message the whole commit message file
@@ -53,7 +52,7 @@ export function subjectOf(message) {
 export function checkCommitMessage(message) {
   const subject = subjectOf(message);
   if (subject === "") return { ok: false, subject, reason: "the commit message is empty" };
-  if (MERGE_PATTERN.test(subject) || SUBJECT_PATTERN.test(subject)) return { ok: true, subject };
+  if (subject.startsWith("Merge ") || SUBJECT_PATTERN.test(subject)) return { ok: true, subject };
   return {
     ok: false,
     subject,

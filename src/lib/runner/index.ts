@@ -37,6 +37,7 @@ export {
   isDatabaseLost,
   isRowSecurityViolation,
   isStatementDenial,
+  isTimeoutFailure,
   outcomeOfFailure,
   sortKeys,
   toProbeFailure,
