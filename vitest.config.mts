@@ -19,6 +19,12 @@ export default defineConfig({
     // An empty suite is not an error; the coverage thresholds below still
     // apply to every run that collects coverage.
     passWithNoTests: true,
+    // Many suites boot a real PGlite (WASM Postgres). Alone that takes well under a second, but
+    // with every worker booting WASM at once, or on a slow CI runner, Vitest's defaults (5 s per
+    // test, 10 s per hook) were exceeded now and then. These are watchdogs, not product
+    // thresholds: the probe timeout and the run ceiling are tested with injected timers.
+    testTimeout: 30_000,
+    hookTimeout: 60_000,
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov", "json-summary"],

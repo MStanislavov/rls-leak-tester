@@ -218,3 +218,62 @@ which about 380 ms is setup; a cell takes about 1 ms.
   output, fail-closed 503, model id only in `model.ts`; all tests use a mocked model (ADR 0018).
 - Not verified: a live Anthropic stream (no key here, by design). The lab UI for Explain and the
   verified-fix loop follow in Phase 5/6 UI work.
+
+## Phases 4 to 7: export, lab UI, explain UI, sharing (2026-09-20)
+
+### Done
+
+- **Phase 4, CI export** (`src/lib/export`, ADR 0019): `generateCiExport` emits
+  `rls-isolation.test.sql` (plain SQL, one block per cell, the runner's own probe builders, every
+  probe in a rolled-back subtransaction, one final exception listing all failed cells),
+  `rls-isolation.yml` (Postgres 18 service, `psql -v ON_ERROR_STOP=1`, `contents: read`) and, as a
+  documented deviation, the setup / schema / seed files it loads. Tested by executing the output:
+  fixed variants pass, leaky variants fail on exactly the declared cells, in PGlite and against real
+  Postgres 18.4 and 17.11 in Docker (`scripts/verify-export-postgres.sh`).
+- **Phase 5, lab UI** (ADRs 0022, 0025, 0027): app shell, landing page, `/docs`, the `/lab`
+  workbench (CodeMirror editors, personas, tables and expectations with visible defaults, Run with
+  progress and Cancel through the Web Worker engine with probe timeout and run ceiling, verdict
+  banner, ARIA grid matrix with icon + text cells and keyboard navigation, details drawer with the
+  probe transcript, static findings, setup errors with SQLSTATE next to the statement, local save,
+  import/export JSON, Export CI check dialog, themes).
+- **Phase 6, client side** (ADR 0023): Explain on failing cells only, "what leaves your browser"
+  preview, streamed answer, and the verified-fix loop: a proposal is applied to a copy, the matrix
+  is re-run, and "Verified fix" appears only when the target cells pass and nothing regressed.
+- **Phase 7, sharing** (ADRs 0020, 0021, 0026): `ScenarioStore` port with localStorage and remote
+  adapters, `supabase/migrations` with FORCE RLS, explicit grants and a pinned-`search_path`
+  `SECURITY DEFINER` lookup for unlisted slugs, `/api/scenarios` routes with server-side `getUser()`
+  checks, rate limits and a read-through cache, GitHub sign-in plumbing, `/s/[slug]` read-only page
+  with Fork, Share disabled with an explanation when Supabase is not configured. The fourth template
+  is the app's own `scenarios` table (drift-guarded against the migration) and the self-isolation
+  proof executes its exported test in PGlite and in real Postgres.
+- One review round (security, UX/accessibility conformance, export-vs-runner drift): 7 major
+  findings reproduced and fixed with a failing test first (ADR 0024): rate-limit identity taken from
+  a client-controlled `X-Forwarded-For` hop; "Verified fix" obtainable by masking seed data with a
+  trigger (proposals are now restricted to policy / grant / RLS statements before any re-run);
+  volatile seed keys, later-added UPDATE grants, later-added tables and cross-session state in the
+  export; a screen-reader verdict announcement that hid "cancelled" and "stale".
+
+### Verified (orchestrator re-run on the final tree)
+
+| Command                             | Result                                                            |
+| ----------------------------------- | ----------------------------------------------------------------- |
+| `npm run format:check`              | exit 0                                                            |
+| `npm run lint`                      | exit 0, zero warnings                                             |
+| `npm run typecheck`                 | exit 0                                                            |
+| `npm run rules`                     | `ok, 15 script rules, 463 files`                                  |
+| `REDIS_URL=… npm run test:coverage` | 125 files, 2517 tests passed; lines 99.06, branches 96.17 percent |
+| `npm run e2e` (production build)    | every route dynamic; 59 Playwright tests passed                   |
+| `npm run e2e:dev`                   | 59 passed (final-gate agent)                                      |
+
+A load-dependent flake was removed: suites that boot real PGlite exceeded Vitest's default hook
+timeout when every worker booted WASM at once; `vitest.config.mts` now sets watchdog timeouts.
+
+### Open (minor review findings, scheduled with Phase 8/9)
+
+- Store privacy polish: invalidate the slug cache on visibility change; `get_scenario_by_slug`
+  should not return the owner id to anonymous callers; server-side timestamps on insert.
+- A failed custom `expectedRowsSql` should show its statement; timed-out cells need their own label;
+  wording of the export's final message and "database unchanged" note (identity sequences advance).
+- The landing page ships a zod chunk (96 KB gzip) it does not need.
+- Not verifiable here: the exported workflow on GitHub's runners, a live Anthropic stream, a real
+  Supabase project (all account-bound).

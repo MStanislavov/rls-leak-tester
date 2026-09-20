@@ -1,0 +1,25 @@
+/*
+ * Lab-only tokens: the syntax colours of the SQL editor. Same system as globals.css (oklch,
+ * :root and .dark); every colour meets WCAG AA on --card in its theme. The editor reads them
+ * through CSS variables, so the theme class on <html> switches it without a reconfigure.
+ */
+:root {
+  --cm-keyword: oklch(0.45 0.17 264);
+  --cm-string: oklch(0.42 0.11 150);
+  --cm-number: oklch(0.45 0.1 70);
+  --cm-comment: oklch(0.48 0.015 262);
+  --cm-type: oklch(0.44 0.19 310);
+}
+
+.dark {
+  --cm-keyword: oklch(0.8 0.1 264);
+  --cm-string: oklch(0.82 0.14 150);
+  --cm-number: oklch(0.84 0.13 85);
+  --cm-comment: oklch(0.75 0.012 262);
+  --cm-type: oklch(0.82 0.12 310);
+}
+
+/* Native selects and their option lists follow the theme. */
+.dark [data-lab-root] select {
+  color-scheme: dark;
+}

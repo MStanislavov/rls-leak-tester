@@ -39,6 +39,18 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
+  --color-status-pass: var(--status-pass);
+  --color-status-pass-bg: var(--status-pass-bg);
+  --color-status-leak: var(--status-leak);
+  --color-status-leak-bg: var(--status-leak-bg);
+  --color-status-escape: var(--status-escape);
+  --color-status-escape-bg: var(--status-escape-bg);
+  --color-status-overblock: var(--status-overblock);
+  --color-status-overblock-bg: var(--status-overblock-bg);
+  --color-status-inconclusive: var(--status-inconclusive);
+  --color-status-inconclusive-bg: var(--status-inconclusive-bg);
+  --color-status-skipped: var(--status-skipped);
+  --color-status-skipped-bg: var(--status-skipped-bg);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -48,73 +60,106 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
+/*
+ * Tokens. A neutral, slightly cool palette with ONE accent (--primary, a calm indigo: buttons,
+ * links, focus ring). Status colours are a separate family and are never the only signal: the
+ * StatusBadge pairs them with an icon and a word. Every text/background pair below was computed
+ * to meet WCAG AA (4.5:1) in both themes; the e2e suite runs axe on both.
+ */
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
+  --background: oklch(0.995 0.002 255);
+  --foreground: oklch(0.2 0.015 262);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
+  --card-foreground: oklch(0.2 0.015 262);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+  --popover-foreground: oklch(0.2 0.015 262);
+  --primary: oklch(0.45 0.17 264);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.965 0.004 255);
+  --secondary-foreground: oklch(0.25 0.015 262);
+  --muted: oklch(0.965 0.004 255);
+  --muted-foreground: oklch(0.48 0.015 262);
+  --accent: oklch(0.955 0.012 264);
+  --accent-foreground: oklch(0.25 0.03 264);
+  --destructive: oklch(0.5 0.2 27);
+  --border: oklch(0.915 0.006 255);
+  --input: oklch(0.915 0.006 255);
+  --ring: oklch(0.55 0.17 264);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --radius: 0.5rem;
+  --sidebar: oklch(0.985 0.002 255);
+  --sidebar-foreground: oklch(0.2 0.015 262);
+  --sidebar-primary: oklch(0.45 0.17 264);
+  --sidebar-primary-foreground: oklch(0.99 0 0);
+  --sidebar-accent: oklch(0.955 0.012 264);
+  --sidebar-accent-foreground: oklch(0.25 0.03 264);
+  --sidebar-border: oklch(0.915 0.006 255);
+  --sidebar-ring: oklch(0.55 0.17 264);
+
+  /* Cell statuses: text/icon colour, and the tint behind it. */
+  --status-pass: oklch(0.42 0.11 150);
+  --status-pass-bg: oklch(0.96 0.035 150);
+  --status-leak: oklch(0.47 0.19 27);
+  --status-leak-bg: oklch(0.96 0.025 27);
+  --status-escape: oklch(0.44 0.19 310);
+  --status-escape-bg: oklch(0.96 0.03 310);
+  --status-overblock: oklch(0.45 0.1 70);
+  --status-overblock-bg: oklch(0.96 0.05 85);
+  --status-inconclusive: oklch(0.43 0.03 255);
+  --status-inconclusive-bg: oklch(0.955 0.008 255);
+  --status-skipped: oklch(0.46 0 0);
+  --status-skipped-bg: oklch(0.965 0 0);
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
+  --background: oklch(0.17 0.008 262);
+  --foreground: oklch(0.96 0.004 262);
+  --card: oklch(0.205 0.01 262);
+  --card-foreground: oklch(0.96 0.004 262);
+  --popover: oklch(0.205 0.01 262);
+  --popover-foreground: oklch(0.96 0.004 262);
+  --primary: oklch(0.76 0.12 264);
+  --primary-foreground: oklch(0.18 0.03 264);
+  --secondary: oklch(0.26 0.012 262);
+  --secondary-foreground: oklch(0.96 0.004 262);
+  --muted: oklch(0.26 0.012 262);
+  --muted-foreground: oklch(0.75 0.012 262);
+  --accent: oklch(0.28 0.03 264);
+  --accent-foreground: oklch(0.96 0.004 262);
+  --destructive: oklch(0.74 0.16 22);
+  --border: oklch(1 0 0 / 12%);
+  --input: oklch(1 0 0 / 16%);
+  --ring: oklch(0.68 0.14 264);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --sidebar: oklch(0.205 0.01 262);
+  --sidebar-foreground: oklch(0.96 0.004 262);
+  --sidebar-primary: oklch(0.76 0.12 264);
+  --sidebar-primary-foreground: oklch(0.18 0.03 264);
+  --sidebar-accent: oklch(0.28 0.03 264);
+  --sidebar-accent-foreground: oklch(0.96 0.004 262);
+  --sidebar-border: oklch(1 0 0 / 12%);
+  --sidebar-ring: oklch(0.68 0.14 264);
+
+  --status-pass: oklch(0.82 0.14 150);
+  --status-pass-bg: oklch(0.27 0.05 150);
+  --status-leak: oklch(0.8 0.12 22);
+  --status-leak-bg: oklch(0.28 0.07 25);
+  --status-escape: oklch(0.82 0.12 310);
+  --status-escape-bg: oklch(0.29 0.08 310);
+  --status-overblock: oklch(0.84 0.13 85);
+  --status-overblock-bg: oklch(0.29 0.05 80);
+  --status-inconclusive: oklch(0.82 0.03 255);
+  --status-inconclusive-bg: oklch(0.28 0.015 255);
+  --status-skipped: oklch(0.78 0 0);
+  --status-skipped-bg: oklch(0.27 0 0);
 }
 
 @layer base {
@@ -126,5 +171,36 @@
   }
   html {
     @apply font-sans;
+    /* Anchored docs sections stop below the sticky header. */
+    scroll-padding-top: 5rem;
+  }
+  /* A visible focus ring on everything that does not bring its own (shadcn controls do). */
+  :where(a, button, summary, [tabindex]):focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+    border-radius: 0.25rem;
+  }
+  code,
+  kbd,
+  pre,
+  samp {
+    @apply font-mono;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

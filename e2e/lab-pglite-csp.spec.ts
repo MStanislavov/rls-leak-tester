@@ -1,18 +1,25 @@
 /**
- * Spike B: PGlite inside Next.js, in a Web Worker, with the Content Security
- * Policy switched on. The same file runs against `next dev` and `next start`
- * (see playwright.config.ts); the expectations that differ are keyed on the mode.
+ * PGlite inside Next.js, in a Web Worker, with the Content Security Policy switched on (ADR 0003),
+ * proven on the real lab. The same file runs against `next dev` and `next start` (see
+ * playwright.config.ts); the expectations that differ are keyed on the mode.
+ *
+ * The landing page and the 404 page (hydration under the nonce policy, no PGlite on `/`) are
+ * covered by e2e/site.spec.ts.
  */
-import { expect, test, type Page, type Response } from "@playwright/test";
+import { expect, test, type Response } from "@playwright/test";
+import {
+  expectCleanBrowser,
+  expectRunStatus,
+  expectVerdict,
+  openLab,
+  runToTheEnd,
+  setEditorText,
+} from "./support/lab";
 import { e2eMode, PageGuard, parseCsp } from "./support/page-guard";
 
 const mode = e2eMode();
 
 const PGLITE_ASSET = /\.(wasm|data)(\?|$)/;
-
-/** The console line Chromium prints for a document that answers 404. */
-const DOCUMENT_404_CONSOLE_LINE =
-  /^\[error\] Failed to load resource: the server responded with a status of 404 \(Not Found\)$/;
 
 /**
  * Reads the raw HTML of a document response and checks that every inline `<script>` in it
@@ -35,50 +42,33 @@ async function expectEveryInlineScriptToCarryTheNonce(response: Response | null)
   }
 }
 
-async function waitForProof(page: Page): Promise<void> {
-  await expect(page.getByTestId("lab-status")).toHaveAttribute("data-status", "done");
-}
-
-async function expectCleanBrowser(guard: PageGuard): Promise<void> {
-  expect(await guard.cspViolations(), "securitypolicyviolation events").toEqual([]);
-  expect(guard.consoleProblems, "console errors and CSP messages").toEqual([]);
-  expect(guard.pageErrors, "uncaught page errors").toEqual([]);
-}
-
 test.describe(`lab with PGlite in a worker (${mode})`, () => {
-  test("runs Postgres with RLS in a worker and renders the result as text", async ({
+  test("the lab hydrates under the nonce policy and loads PGlite only when a run starts", async ({
     page,
-  }, testInfo) => {
+  }) => {
     const guard = await PageGuard.attach(page);
-    await page.goto("/lab");
-    await waitForProof(page);
+    const response = await page.goto("/lab");
+    expect(response?.status()).toBe(200);
+    // Rendered for this request, not prerendered: every inline script carries its nonce.
+    expect(response?.headers()["x-nextjs-prerender"]).toBeUndefined();
+    await expectEveryInlineScriptToCarryTheNonce(response);
 
-    await expect(page.getByTestId("lab-version")).toContainText("PostgreSQL");
-    await expect(page.getByTestId("lab-total-rows")).toHaveText("3");
-    await expect(page.getByTestId("lab-acting-role")).toHaveText("spike_app_user");
-    await expect(page.getByTestId("lab-visible-count")).toHaveText("2");
-    await expect(page.getByTestId("lab-visible-row")).toHaveText([
-      "1 alice alice note one",
-      "3 alice alice note two",
-    ]);
-    await expect(page.getByTestId("lab-generation")).toHaveText("1");
+    await expect(page.getByTestId("run-button")).toBeVisible();
+    await guard.waitForHydration('[data-testid="run-button"]');
+    await expect(page.locator(".cm-content")).toBeVisible();
+    await page.waitForLoadState("networkidle");
+    // Lazy: no worker and no WASM before the first run.
+    expect(guard.workers).toEqual([]);
+    expect(guard.requestedUrls().filter((url) => PGLITE_ASSET.test(url))).toEqual([]);
 
+    await runToTheEnd(page);
+    await expectVerdict(page, "LEAKING");
     // It really is a dedicated worker, and it really fetched the WASM and the fs bundle.
     expect(guard.workers).toHaveLength(1);
     const assets = guard.requestedUrls().filter((url) => PGLITE_ASSET.test(url));
     expect(assets.some((url) => /pglite[^/]*\.wasm/.test(url))).toBe(true);
     expect(assets.some((url) => /pglite[^/]*\.data/.test(url))).toBe(true);
-
     await expectCleanBrowser(guard);
-
-    const workerStartupMs = Number(await page.getByTestId("lab-worker-startup-ms").textContent());
-    const totalMs = Number(await page.getByTestId("lab-total-ms").textContent());
-    expect(workerStartupMs).toBeGreaterThan(0);
-    testInfo.annotations.push({
-      type: "pglite-cold-start",
-      description: `mode=${mode} workerStartupMs=${workerStartupMs} pageTotalMs=${totalMs}`,
-    });
-    console.log(`[spike-b] mode=${mode} workerStartupMs=${workerStartupMs} pageTotalMs=${totalMs}`);
   });
 
   test("sends a strict Content-Security-Policy and the other security headers", async ({
@@ -110,10 +100,11 @@ test.describe(`lab with PGlite in a worker (${mode})`, () => {
     }
     expect(csp.get("default-src")).toEqual(["'self'"]);
     expect(csp.get("worker-src")).toEqual(["'self'", "blob:"]);
-    expect(csp.get("connect-src")).toEqual(["'self'"]);
     expect(csp.get("object-src")).toEqual(["'none'"]);
     expect(csp.get("base-uri")).toEqual(["'self'"]);
     expect(csp.get("frame-ancestors")).toEqual(["'none'"]);
+    // With no environment variables the lab talks to nobody but its own origin.
+    expect(csp.get("connect-src")).toEqual(["'self'"]);
 
     expect(headers["x-content-type-options"]).toBe("nosniff");
     expect(headers["referrer-policy"]).toBe("strict-origin-when-cross-origin");
@@ -129,16 +120,10 @@ test.describe(`lab with PGlite in a worker (${mode})`, () => {
     expect(secondPolicy).toContain("'nonce-");
     expect(secondPolicy).not.toBe(policy);
 
-    // Other kinds of response carry the headers too: the landing page, a 404, and the
-    // worker script, whose own policy is what allows (only) WebAssembly inside the worker.
-    for (const path of ["/", "/this-page-does-not-exist"]) {
-      const other = await request.get(path);
-      expect(other.headers()["content-security-policy"], path).toContain("'nonce-");
-      expect(other.headers()["x-content-type-options"], path).toBe("nosniff");
-      expect(other.headers()["x-frame-options"], path).toBe("DENY");
-    }
-
-    await waitForProof(page);
+    // The worker script carries its own policy, which is what allows (only) WebAssembly in it.
+    await expect(page.getByTestId("run-button")).toBeVisible();
+    await guard.waitForHydration('[data-testid="run-button"]');
+    await runToTheEnd(page);
     const workerUrl = guard.workers[0]?.url() ?? "";
     expect(workerUrl).toContain("/_next/static/");
     const workerResponse = await request.get(workerUrl);
@@ -153,147 +138,63 @@ test.describe(`lab with PGlite in a worker (${mode})`, () => {
     expect(workerResponse.headers()["x-content-type-options"]).toBe("nosniff");
   });
 
-  test("the landing page loads no PGlite asset, worker or code", async ({ page }) => {
-    const guard = await PageGuard.attach(page);
-    await page.goto("/");
-    await expect(page.getByRole("heading", { level: 1 })).toHaveText("RLS Leak Tester");
-    // Hydrated first: a page whose scripts were blocked would request nothing and pass for the
-    // wrong reason.
-    await guard.waitForHydration("h1");
-    await page.waitForLoadState("networkidle");
+  test("every run is a fresh database on a worker of its own", async ({ page }) => {
+    const guard = await openLab(page);
+    // The template's schema has plain CREATE TABLE statements: on a database that survived the
+    // first run, the second setup would fail with 42P07 "already exists" instead of finishing.
+    await runToTheEnd(page);
+    await expectVerdict(page, "LEAKING");
+    expect(guard.workers).toHaveLength(1);
+    await expect.poll(() => guard.closedWorkers.length).toBe(1);
+    expect(guard.closedWorkers[0] === guard.workers[0]).toBe(true);
 
-    const urls = guard.requestedUrls();
-    expect(urls.filter((url) => PGLITE_ASSET.test(url))).toEqual([]);
-    expect(urls.filter((url) => /pglite|initdb/i.test(url))).toEqual([]);
-    expect(guard.workers).toEqual([]);
-
-    // Chunk names are hashes, so look inside every script the landing page fetched.
-    const scripts = guard.responses.filter((response) => /\.js(\?|$)/.test(response.url()));
-    expect(scripts.length).toBeGreaterThan(0);
-    for (const script of scripts) {
-      const body = await script.text();
-      expect(body.includes("pglite.wasm"), `${script.url()} contains PGlite`).toBe(false);
-    }
-  });
-
-  // Needs every page to render dynamically so the nonce reaches the HTML. The root layout
-  // awaits connection() for that (src/app/layout.tsx), which covers the 404 page as well.
-  test("the landing page hydrates without a CSP violation or a page error", async ({ page }) => {
-    const guard = await PageGuard.attach(page);
-    const response = await page.goto("/");
-    expect(response?.status()).toBe(200);
-    await expect(page.getByRole("heading", { level: 1 })).toHaveText("RLS Leak Tester");
-
-    // Rendered for this request, not prerendered: every inline script carries the nonce of
-    // its own response.
-    expect(response?.headers()["x-nextjs-prerender"]).toBeUndefined();
-    await expectEveryInlineScriptToCarryTheNonce(response);
-
-    await guard.waitForHydration("h1");
-    await page.waitForLoadState("networkidle");
+    await runToTheEnd(page);
+    await expectVerdict(page, "LEAKING");
+    await expect(page.getByTestId("setup-error")).toHaveCount(0);
+    expect(guard.workers).toHaveLength(2);
+    expect(guard.workers[1] === guard.workers[0], "the second worker is a new one").toBe(false);
+    await expect.poll(() => guard.closedWorkers.length).toBe(2);
+    expect(page.workers()).toHaveLength(0);
     await expectCleanBrowser(guard);
   });
 
-  test("the 404 page hydrates without a CSP violation or a page error", async ({ page }) => {
-    const guard = await PageGuard.attach(page);
-    const response = await page.goto("/this-page-does-not-exist");
-    expect(response?.status()).toBe(404);
-    await expect(page.getByRole("heading", { level: 1 })).toHaveText("404");
-
-    expect(response?.headers()["x-nextjs-prerender"]).toBeUndefined();
-    await expectEveryInlineScriptToCarryTheNonce(response);
-
-    await guard.waitForHydration("h1");
-    await page.waitForLoadState("networkidle");
-
-    expect(await guard.cspViolations(), "securitypolicyviolation events").toEqual([]);
-    expect(guard.pageErrors, "uncaught page errors").toEqual([]);
-    // Chromium reports the 404 status of the document itself as a console error. That one
-    // line is expected; anything else, and any line about the policy, is not.
-    expect(guard.consoleProblems.filter((line) => !DOCUMENT_404_CONSOLE_LINE.test(line))).toEqual(
-      [],
-    );
-  });
-
-  test("a query that exceeds its timeout kills the worker, and a new one takes over", async ({
+  test("a statement that exceeds its timeout kills the worker, and a new one takes over", async ({
     page,
   }) => {
-    const guard = await PageGuard.attach(page);
-    await page.goto("/lab");
-    await waitForProof(page);
-    await expect(page.getByTestId("lab-generation")).toHaveText("1");
-    expect(guard.workers).toHaveLength(1);
-    expect(guard.closedWorkers).toEqual([]);
+    const guard = await openLab(page, "?template=todos-sharing&variant=fixed");
+    // Sleeps three times as long as the 5 s statement timeout (rules.yaml). Without the timeout
+    // the statement would simply finish and the run would end in a verdict, not in this error.
+    await setEditorText(page, "seed", "select pg_sleep(15);");
+    await page.getByTestId("run-button").click();
+    await expectRunStatus(page, "setting-up");
 
-    // Leave a table behind that the proof's own setup never drops, and show that it survives
-    // a second run on the same worker. Without this control "the table is gone afterwards"
-    // would prove nothing, because the proof starts with `drop table if exists`.
-    const marker = page.getByTestId("lab-marker");
-    await expect(marker).toHaveAttribute("data-marker", "absent");
-    await page.getByTestId("marker-create").click();
-    await expect(marker).toHaveAttribute("data-marker", "present");
-    await expect(page.getByTestId("lab-run-count")).toHaveText("1");
-    await page.getByTestId("lab-rerun").click();
-    await expect(page.getByTestId("lab-run-count")).toHaveText("2");
-    await waitForProof(page);
-    await expect(page.getByTestId("lab-generation")).toHaveText("1");
-    await expect(marker).toHaveAttribute("data-marker", "present");
-    expect(guard.workers).toHaveLength(1);
-    expect(guard.closedWorkers).toHaveLength(0);
+    const error = page.getByTestId("setup-error");
+    await expect(error).toHaveAttribute("data-timed-out", "true", { timeout: 14_000 });
+    const timedOutAt = Date.now();
+    await expectRunStatus(page, "failed");
 
-    const startedAt = Date.now();
-    await page.getByTestId("slow-run").click();
-    await expect(page.getByTestId("slow-status")).toHaveAttribute("data-status", "running");
-
-    // The page stays responsive while Postgres is stuck inside the worker.
-    const ping = page.getByTestId("ping-button");
-    await ping.click();
-    await ping.click();
-    await ping.click();
-    await expect(page.getByTestId("ping-count")).toHaveText("3");
-    await expect(page.getByTestId("slow-status")).toHaveAttribute("data-status", "running");
-
-    // pg_sleep(10) is cut off by the 1.5 s timeout, far sooner than it would have finished.
-    await expect(page.getByTestId("slow-status")).toHaveAttribute("data-status", "timed-out", {
-      timeout: 8_000,
-    });
-    expect(Date.now() - startedAt).toBeLessThan(8_000);
-    await expect(page.getByTestId("slow-status")).toContainText("the worker was terminated");
-
-    // The browser itself, not only the page's bookkeeping, reports the first worker as gone.
+    // The browser itself, not only the page's bookkeeping, reports the worker as gone.
     // (Worker handles are compared by identity; they are not plain data.)
     const firstWorker = guard.workers[0];
+    expect(guard.workers).toHaveLength(1);
     await expect.poll(() => guard.closedWorkers.length, { timeout: 5_000 }).toBe(1);
     expect(guard.closedWorkers[0] === firstWorker, "the closed worker is the first one").toBe(true);
     expect(page.workers()).toHaveLength(0);
-    await expect(marker).toHaveAttribute("data-marker", "unknown");
 
-    // A fresh worker, and with it a fresh Postgres, answers the next run: the marker table
-    // that survived the re-run above does not exist in it.
-    await page.getByTestId("lab-rerun").click();
-    await expect(page.getByTestId("lab-run-count")).toHaveText("3");
-    await waitForProof(page);
-    await expect(page.getByTestId("lab-generation")).toHaveText("2");
-    await expect(page.getByTestId("lab-visible-count")).toHaveText("2");
-    await expect(page.getByTestId("lab-total-rows")).toHaveText("3");
-    await expect(marker).toHaveAttribute("data-marker", "absent");
+    // Past the point where pg_sleep(15) would have returned had the worker lived on (it was cut
+    // off after 5 s, so 10 s later at the latest): nothing from it reaches the page.
+    await page.waitForTimeout(Math.max(0, 11_000 - (Date.now() - timedOutAt)));
+    await expectRunStatus(page, "failed");
+    await expect(error).toHaveAttribute("data-timed-out", "true");
+    expect(guard.workers).toHaveLength(1);
+    expect(page.workers()).toHaveLength(0);
+
+    // A fresh worker, and with it a fresh Postgres, answers the next run.
+    await setEditorText(page, "seed", "select 1;");
+    await runToTheEnd(page);
     expect(guard.workers).toHaveLength(2);
-    const secondWorker = guard.workers[1];
-    const onlyTheSecondWorkerIsAlive = (): boolean =>
-      page.workers().length === 1 && page.workers()[0] === secondWorker;
-    expect(secondWorker === firstWorker, "the second worker is a new one").toBe(false);
-    expect(onlyTheSecondWorkerIsAlive()).toBe(true);
-    expect(guard.closedWorkers).toHaveLength(1);
-
-    // Past the point where pg_sleep(10) would have returned had the first worker lived on:
-    // nothing from it reaches the page, and the replacement is still the only worker.
-    await page.waitForTimeout(Math.max(0, 11_000 - (Date.now() - startedAt)));
-    await expect(page.getByTestId("slow-status")).toHaveAttribute("data-status", "timed-out");
-    await expect(page.getByTestId("lab-generation")).toHaveText("2");
-    await expect(page.getByTestId("lab-run-count")).toHaveText("3");
-    expect(onlyTheSecondWorkerIsAlive()).toBe(true);
-    expect(guard.closedWorkers).toHaveLength(1);
-
+    expect(guard.workers[1] === firstWorker, "the second worker is a new one").toBe(false);
+    await expect.poll(() => guard.closedWorkers.length).toBe(2);
     await expectCleanBrowser(guard);
   });
 });
