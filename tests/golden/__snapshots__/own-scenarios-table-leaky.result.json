@@ -1,0 +1,1163 @@
+{
+  "version": 1,
+  "scenarioId": "own-scenarios-table-leaky",
+  "mode": "supabase",
+  "verdict": "LEAKING",
+  "counts": {
+    "pass": 16,
+    "leak": 4,
+    "escape": 0,
+    "overblock": 0,
+    "inconclusive": 0,
+    "skipped": 0
+  },
+  "totalCells": 20,
+  "missingSchemas": [],
+  "personas": [
+    {
+      "id": "anon",
+      "label": "Anonymous visitor",
+      "dbRole": "anon",
+      "roleExists": true,
+      "rlsBypass": null,
+      "claimsJson": "{\"role\":\"anon\"}"
+    },
+    {
+      "id": "alice",
+      "label": "Alice (owns three scenarios)",
+      "dbRole": "authenticated",
+      "roleExists": true,
+      "rlsBypass": null,
+      "claimsJson": "{\"email\":\"alice@example.com\",\"role\":\"authenticated\",\"sub\":\"aaaaaaaa-0000-4000-8000-000000000001\"}"
+    },
+    {
+      "id": "bob",
+      "label": "Bob (owns three scenarios)",
+      "dbRole": "authenticated",
+      "roleExists": true,
+      "rlsBypass": null,
+      "claimsJson": "{\"email\":\"bob@example.com\",\"role\":\"authenticated\",\"sub\":\"bbbbbbbb-0000-4000-8000-000000000002\"}"
+    },
+    {
+      "id": "carol",
+      "label": "Carol (signed in, owns nothing)",
+      "dbRole": "authenticated",
+      "roleExists": true,
+      "rlsBypass": null,
+      "claimsJson": "{\"email\":\"carol@example.com\",\"role\":\"authenticated\",\"sub\":\"cccccccc-0000-4000-8000-000000000003\"}"
+    },
+    {
+      "id": "service",
+      "label": "Backend (service role)",
+      "dbRole": "service_role",
+      "roleExists": true,
+      "rlsBypass": "bypassrls",
+      "claimsJson": "{\"role\":\"service_role\"}"
+    }
+  ],
+  "tables": [
+    {
+      "schema": "public",
+      "name": "scenarios",
+      "primaryKey": [
+        "id"
+      ],
+      "ownerColumn": "owner",
+      "tenantColumn": null,
+      "rlsEnabled": true,
+      "rlsForced": true,
+      "rowCount": 6,
+      "skippedReason": null
+    }
+  ],
+  "cells": [
+    {
+      "id": "anon|public.scenarios|select",
+      "personaId": "anon",
+      "schema": "public",
+      "table": "scenarios",
+      "operation": "select",
+      "scope": "custom",
+      "expectationSource": "explicit",
+      "expectedKeys": [
+        "[\"5ce00000-0000-4000-8000-0000000000a1\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000b1\"]"
+      ],
+      "actualKeys": [
+        "[\"5ce00000-0000-4000-8000-0000000000a1\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000a2\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000b1\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000b2\"]"
+      ],
+      "blindKeys": [],
+      "leakedKeys": [
+        "[\"5ce00000-0000-4000-8000-0000000000a2\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000b2\"]"
+      ],
+      "missingKeys": [],
+      "statement": "select \"id\"::text as k0 from \"public\".\"scenarios\"",
+      "sql": "begin;\nselect set_config('role', 'anon', true);\nselect set_config('request.jwt.claims', '{\"role\":\"anon\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nselect \"id\"::text as k0 from \"public\".\"scenarios\";\nrollback;",
+      "perRowFallback": false,
+      "error": null,
+      "subProbes": [],
+      "policies": [
+        {
+          "name": "scenarios_public_read",
+          "command": "select",
+          "permissive": true,
+          "roles": [
+            "anon",
+            "authenticated"
+          ],
+          "using": "(visibility = ANY (ARRAY['public'::text, 'unlisted'::text]))",
+          "withCheck": null,
+          "appliesAs": "command"
+        }
+      ],
+      "rlsBypass": null,
+      "status": "leak",
+      "reason": null
+    },
+    {
+      "id": "anon|public.scenarios|insert",
+      "personaId": "anon",
+      "schema": "public",
+      "table": "scenarios",
+      "operation": "insert",
+      "scope": "none",
+      "expectationSource": "explicit",
+      "expectedKeys": [],
+      "actualKeys": [],
+      "blindKeys": [],
+      "leakedKeys": [],
+      "missingKeys": [],
+      "statement": "",
+      "sql": "",
+      "perRowFallback": false,
+      "error": null,
+      "subProbes": [
+        {
+          "kind": "insert-other",
+          "sourceKey": "[\"5ce00000-0000-4000-8000-0000000000a1\"]",
+          "expected": "blocked",
+          "outcome": "blocked",
+          "status": "pass",
+          "reason": null,
+          "movedKeys": [],
+          "statement": "insert into \"public\".\"scenarios\" (\"id\", \"slug\", \"owner\", \"title\", \"payload\", \"visibility\", \"created_at\", \"updated_at\") select '00000000-0000-4000-8000-000000000001'::uuid, \"slug\", \"owner\", \"title\", \"payload\", \"visibility\", \"created_at\", \"updated_at\" from pg_temp.\"rls_leak_tester_source\"",
+          "sql": "begin;\nselect set_config('role', 'anon', true);\nselect set_config('request.jwt.claims', '{\"role\":\"anon\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nreset role;\ncreate temporary table \"rls_leak_tester_source\" on commit drop as select * from \"public\".\"scenarios\" where \"id\"::text = '5ce00000-0000-4000-8000-0000000000a1';\ngrant select on pg_temp.\"rls_leak_tester_source\" to \"anon\";\nselect set_config('role', 'anon', true);\nselect set_config('request.jwt.claims', '{\"role\":\"anon\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\ninsert into \"public\".\"scenarios\" (\"id\", \"slug\", \"owner\", \"title\", \"payload\", \"visibility\", \"created_at\", \"updated_at\") select '00000000-0000-4000-8000-000000000001'::uuid, \"slug\", \"owner\", \"title\", \"payload\", \"visibility\", \"created_at\", \"updated_at\" from pg_temp.\"rls_leak_tester_source\";\nrollback;",
+          "error": {
+            "sqlState": "42501",
+            "message": "permission denied for table scenarios"
+          }
+        }
+      ],
+      "policies": [],
+      "rlsBypass": null,
+      "status": "pass",
+      "reason": null
+    },
+    {
+      "id": "anon|public.scenarios|update",
+      "personaId": "anon",
+      "schema": "public",
+      "table": "scenarios",
+      "operation": "update",
+      "scope": "none",
+      "expectationSource": "explicit",
+      "expectedKeys": [],
+      "actualKeys": [],
+      "blindKeys": [],
+      "leakedKeys": [],
+      "missingKeys": [],
+      "statement": "update \"public\".\"scenarios\" set \"slug\" = \"slug\" returning \"id\"::text as k0",
+      "sql": "begin;\nselect set_config('role', 'anon', true);\nselect set_config('request.jwt.claims', '{\"role\":\"anon\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nupdate \"public\".\"scenarios\" set \"slug\" = \"slug\" returning \"id\"::text as k0;\nrollback;",
+      "perRowFallback": false,
+      "error": {
+        "sqlState": "42501",
+        "message": "permission denied for table scenarios"
+      },
+      "subProbes": [
+        {
+          "kind": "escape-targeted",
+          "expected": "blocked",
+          "sourceKey": null,
+          "outcome": "skipped",
+          "status": "skipped",
+          "reason": "No row is inside scope \"none\": there is nothing to move.",
+          "movedKeys": [],
+          "statement": "",
+          "sql": "",
+          "error": null
+        },
+        {
+          "kind": "escape-bulk",
+          "expected": "blocked",
+          "sourceKey": null,
+          "outcome": "skipped",
+          "status": "skipped",
+          "reason": "No row is inside scope \"none\": there is nothing to move.",
+          "movedKeys": [],
+          "statement": "",
+          "sql": "",
+          "error": null
+        }
+      ],
+      "policies": [
+        {
+          "name": "scenarios_public_read",
+          "command": "select",
+          "permissive": true,
+          "roles": [
+            "anon",
+            "authenticated"
+          ],
+          "using": "(visibility = ANY (ARRAY['public'::text, 'unlisted'::text]))",
+          "withCheck": null,
+          "appliesAs": "visibility"
+        }
+      ],
+      "rlsBypass": null,
+      "status": "pass",
+      "reason": null
+    },
+    {
+      "id": "anon|public.scenarios|delete",
+      "personaId": "anon",
+      "schema": "public",
+      "table": "scenarios",
+      "operation": "delete",
+      "scope": "none",
+      "expectationSource": "explicit",
+      "expectedKeys": [],
+      "actualKeys": [],
+      "blindKeys": [],
+      "leakedKeys": [],
+      "missingKeys": [],
+      "statement": "delete from \"public\".\"scenarios\" returning \"id\"::text as k0",
+      "sql": "begin;\nselect set_config('role', 'anon', true);\nselect set_config('request.jwt.claims', '{\"role\":\"anon\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\ndelete from \"public\".\"scenarios\" returning \"id\"::text as k0;\nrollback;\n\n-- The same without WHERE and RETURNING: no SELECT policy applies to it.\nbegin;\nselect set_config('role', 'anon', true);\nselect set_config('request.jwt.claims', '{\"role\":\"anon\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nreset role;\nselect \"id\"::text as k0 from \"public\".\"scenarios\";\nselect set_config('role', 'anon', true);\nselect set_config('request.jwt.claims', '{\"role\":\"anon\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\ndelete from \"public\".\"scenarios\";\nrollback;",
+      "perRowFallback": false,
+      "error": {
+        "sqlState": "42501",
+        "message": "permission denied for table scenarios"
+      },
+      "subProbes": [],
+      "policies": [
+        {
+          "name": "scenarios_public_read",
+          "command": "select",
+          "permissive": true,
+          "roles": [
+            "anon",
+            "authenticated"
+          ],
+          "using": "(visibility = ANY (ARRAY['public'::text, 'unlisted'::text]))",
+          "withCheck": null,
+          "appliesAs": "visibility"
+        }
+      ],
+      "rlsBypass": null,
+      "status": "pass",
+      "reason": null
+    },
+    {
+      "id": "alice|public.scenarios|select",
+      "personaId": "alice",
+      "schema": "public",
+      "table": "scenarios",
+      "operation": "select",
+      "scope": "custom",
+      "expectationSource": "explicit",
+      "expectedKeys": [
+        "[\"5ce00000-0000-4000-8000-0000000000a1\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000a2\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000a3\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000b1\"]"
+      ],
+      "actualKeys": [
+        "[\"5ce00000-0000-4000-8000-0000000000a1\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000a2\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000a3\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000b1\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000b2\"]"
+      ],
+      "blindKeys": [],
+      "leakedKeys": [
+        "[\"5ce00000-0000-4000-8000-0000000000b2\"]"
+      ],
+      "missingKeys": [],
+      "statement": "select \"id\"::text as k0 from \"public\".\"scenarios\"",
+      "sql": "begin;\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"alice@example.com\",\"role\":\"authenticated\",\"sub\":\"aaaaaaaa-0000-4000-8000-000000000001\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nselect \"id\"::text as k0 from \"public\".\"scenarios\";\nrollback;",
+      "perRowFallback": false,
+      "error": null,
+      "subProbes": [],
+      "policies": [
+        {
+          "name": "scenarios_owner_all",
+          "command": "all",
+          "permissive": true,
+          "roles": [
+            "authenticated"
+          ],
+          "using": "(owner = ( SELECT auth.uid() AS uid))",
+          "withCheck": "(owner = ( SELECT auth.uid() AS uid))",
+          "appliesAs": "command"
+        },
+        {
+          "name": "scenarios_public_read",
+          "command": "select",
+          "permissive": true,
+          "roles": [
+            "anon",
+            "authenticated"
+          ],
+          "using": "(visibility = ANY (ARRAY['public'::text, 'unlisted'::text]))",
+          "withCheck": null,
+          "appliesAs": "command"
+        }
+      ],
+      "rlsBypass": null,
+      "status": "leak",
+      "reason": null
+    },
+    {
+      "id": "alice|public.scenarios|insert",
+      "personaId": "alice",
+      "schema": "public",
+      "table": "scenarios",
+      "operation": "insert",
+      "scope": "own",
+      "expectationSource": "explicit",
+      "expectedKeys": [],
+      "actualKeys": [],
+      "blindKeys": [],
+      "leakedKeys": [],
+      "missingKeys": [],
+      "statement": "",
+      "sql": "",
+      "perRowFallback": false,
+      "error": null,
+      "subProbes": [
+        {
+          "kind": "insert-own",
+          "sourceKey": "[\"5ce00000-0000-4000-8000-0000000000a1\"]",
+          "expected": "allowed",
+          "outcome": "allowed",
+          "status": "pass",
+          "reason": null,
+          "movedKeys": [],
+          "statement": "insert into \"public\".\"scenarios\" (\"id\", \"slug\", \"owner\", \"title\", \"payload\", \"visibility\", \"created_at\", \"updated_at\") select '00000000-0000-4000-8000-000000000001'::uuid, \"slug\", \"owner\", \"title\", \"payload\", \"visibility\", \"created_at\", \"updated_at\" from pg_temp.\"rls_leak_tester_source\"",
+          "sql": "begin;\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"alice@example.com\",\"role\":\"authenticated\",\"sub\":\"aaaaaaaa-0000-4000-8000-000000000001\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nreset role;\ncreate temporary table \"rls_leak_tester_source\" on commit drop as select * from \"public\".\"scenarios\" where \"id\"::text = '5ce00000-0000-4000-8000-0000000000a1';\ngrant select on pg_temp.\"rls_leak_tester_source\" to \"authenticated\";\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"alice@example.com\",\"role\":\"authenticated\",\"sub\":\"aaaaaaaa-0000-4000-8000-000000000001\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\ninsert into \"public\".\"scenarios\" (\"id\", \"slug\", \"owner\", \"title\", \"payload\", \"visibility\", \"created_at\", \"updated_at\") select '00000000-0000-4000-8000-000000000001'::uuid, \"slug\", \"owner\", \"title\", \"payload\", \"visibility\", \"created_at\", \"updated_at\" from pg_temp.\"rls_leak_tester_source\";\nrollback;",
+          "error": null
+        },
+        {
+          "kind": "insert-other",
+          "sourceKey": "[\"5ce00000-0000-4000-8000-0000000000b1\"]",
+          "expected": "blocked",
+          "outcome": "blocked",
+          "status": "pass",
+          "reason": null,
+          "movedKeys": [],
+          "statement": "insert into \"public\".\"scenarios\" (\"id\", \"slug\", \"owner\", \"title\", \"payload\", \"visibility\", \"created_at\", \"updated_at\") select '00000000-0000-4000-8000-000000000001'::uuid, \"slug\", \"owner\", \"title\", \"payload\", \"visibility\", \"created_at\", \"updated_at\" from pg_temp.\"rls_leak_tester_source\"",
+          "sql": "begin;\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"alice@example.com\",\"role\":\"authenticated\",\"sub\":\"aaaaaaaa-0000-4000-8000-000000000001\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nreset role;\ncreate temporary table \"rls_leak_tester_source\" on commit drop as select * from \"public\".\"scenarios\" where \"id\"::text = '5ce00000-0000-4000-8000-0000000000b1';\ngrant select on pg_temp.\"rls_leak_tester_source\" to \"authenticated\";\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"alice@example.com\",\"role\":\"authenticated\",\"sub\":\"aaaaaaaa-0000-4000-8000-000000000001\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\ninsert into \"public\".\"scenarios\" (\"id\", \"slug\", \"owner\", \"title\", \"payload\", \"visibility\", \"created_at\", \"updated_at\") select '00000000-0000-4000-8000-000000000001'::uuid, \"slug\", \"owner\", \"title\", \"payload\", \"visibility\", \"created_at\", \"updated_at\" from pg_temp.\"rls_leak_tester_source\";\nrollback;",
+          "error": {
+            "sqlState": "42501",
+            "message": "new row violates row-level security policy for table \"scenarios\""
+          }
+        }
+      ],
+      "policies": [
+        {
+          "name": "scenarios_owner_all",
+          "command": "all",
+          "permissive": true,
+          "roles": [
+            "authenticated"
+          ],
+          "using": "(owner = ( SELECT auth.uid() AS uid))",
+          "withCheck": "(owner = ( SELECT auth.uid() AS uid))",
+          "appliesAs": "command"
+        }
+      ],
+      "rlsBypass": null,
+      "status": "pass",
+      "reason": null
+    },
+    {
+      "id": "alice|public.scenarios|update",
+      "personaId": "alice",
+      "schema": "public",
+      "table": "scenarios",
+      "operation": "update",
+      "scope": "own",
+      "expectationSource": "explicit",
+      "expectedKeys": [
+        "[\"5ce00000-0000-4000-8000-0000000000a1\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000a2\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000a3\"]"
+      ],
+      "actualKeys": [
+        "[\"5ce00000-0000-4000-8000-0000000000a1\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000a2\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000a3\"]"
+      ],
+      "blindKeys": [],
+      "leakedKeys": [],
+      "missingKeys": [],
+      "statement": "update \"public\".\"scenarios\" set \"slug\" = \"slug\" returning \"id\"::text as k0",
+      "sql": "begin;\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"alice@example.com\",\"role\":\"authenticated\",\"sub\":\"aaaaaaaa-0000-4000-8000-000000000001\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nupdate \"public\".\"scenarios\" set \"slug\" = \"slug\" returning \"id\"::text as k0;\nrollback;\n\n-- Without WHERE and RETURNING, and with a value that does not read the table: no SELECT policy applies to it.\nbegin;\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"alice@example.com\",\"role\":\"authenticated\",\"sub\":\"aaaaaaaa-0000-4000-8000-000000000001\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nreset role;\ncreate temporary table \"rls_leak_tester_source\" on commit drop as select * from \"public\".\"scenarios\" where \"id\"::text = '5ce00000-0000-4000-8000-0000000000a1';\ngrant select on pg_temp.\"rls_leak_tester_source\" to \"authenticated\";\nselect \"id\"::text as k0, tableoid::text || ':' || ctid::text as row_version from \"public\".\"scenarios\";\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"alice@example.com\",\"role\":\"authenticated\",\"sub\":\"aaaaaaaa-0000-4000-8000-000000000001\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nsavepoint rls_probe;\nupdate \"public\".\"scenarios\" set \"slug\" = (select \"slug\" from pg_temp.\"rls_leak_tester_source\");\nrollback to savepoint rls_probe;\nrelease savepoint rls_probe;\nsavepoint rls_probe;\nupdate \"public\".\"scenarios\" set \"title\" = (select \"title\" from pg_temp.\"rls_leak_tester_source\");\nreset role;\nselect \"id\"::text as k0, tableoid::text || ':' || ctid::text as row_version from \"public\".\"scenarios\";\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"alice@example.com\",\"role\":\"authenticated\",\"sub\":\"aaaaaaaa-0000-4000-8000-000000000001\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nrollback to savepoint rls_probe;\nrelease savepoint rls_probe;\nrollback;",
+      "perRowFallback": false,
+      "error": null,
+      "subProbes": [
+        {
+          "kind": "escape-targeted",
+          "expected": "blocked",
+          "sourceKey": "[\"5ce00000-0000-4000-8000-0000000000a1\"]",
+          "outcome": "blocked",
+          "status": "pass",
+          "reason": null,
+          "movedKeys": [],
+          "statement": "update \"public\".\"scenarios\" set \"owner\" = 'bbbbbbbb-0000-4000-8000-000000000002'::uuid where \"id\"::text = '5ce00000-0000-4000-8000-0000000000a1' returning \"id\"::text as k0",
+          "sql": "begin;\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"alice@example.com\",\"role\":\"authenticated\",\"sub\":\"aaaaaaaa-0000-4000-8000-000000000001\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nupdate \"public\".\"scenarios\" set \"owner\" = 'bbbbbbbb-0000-4000-8000-000000000002'::uuid where \"id\"::text = '5ce00000-0000-4000-8000-0000000000a1' returning \"id\"::text as k0;\nrollback;",
+          "error": {
+            "sqlState": "42501",
+            "message": "new row violates row-level security policy for table \"scenarios\""
+          }
+        },
+        {
+          "kind": "escape-bulk",
+          "expected": "blocked",
+          "sourceKey": "[\"5ce00000-0000-4000-8000-0000000000a1\"]",
+          "outcome": "blocked",
+          "status": "pass",
+          "reason": null,
+          "movedKeys": [],
+          "statement": "update \"public\".\"scenarios\" set \"owner\" = 'bbbbbbbb-0000-4000-8000-000000000002'::uuid",
+          "sql": "begin;\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"alice@example.com\",\"role\":\"authenticated\",\"sub\":\"aaaaaaaa-0000-4000-8000-000000000001\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nupdate \"public\".\"scenarios\" set \"owner\" = 'bbbbbbbb-0000-4000-8000-000000000002'::uuid;\nrollback;",
+          "error": {
+            "sqlState": "42501",
+            "message": "new row violates row-level security policy for table \"scenarios\""
+          }
+        }
+      ],
+      "policies": [
+        {
+          "name": "scenarios_owner_all",
+          "command": "all",
+          "permissive": true,
+          "roles": [
+            "authenticated"
+          ],
+          "using": "(owner = ( SELECT auth.uid() AS uid))",
+          "withCheck": "(owner = ( SELECT auth.uid() AS uid))",
+          "appliesAs": "command"
+        },
+        {
+          "name": "scenarios_public_read",
+          "command": "select",
+          "permissive": true,
+          "roles": [
+            "anon",
+            "authenticated"
+          ],
+          "using": "(visibility = ANY (ARRAY['public'::text, 'unlisted'::text]))",
+          "withCheck": null,
+          "appliesAs": "visibility"
+        }
+      ],
+      "rlsBypass": null,
+      "status": "pass",
+      "reason": null
+    },
+    {
+      "id": "alice|public.scenarios|delete",
+      "personaId": "alice",
+      "schema": "public",
+      "table": "scenarios",
+      "operation": "delete",
+      "scope": "own",
+      "expectationSource": "explicit",
+      "expectedKeys": [
+        "[\"5ce00000-0000-4000-8000-0000000000a1\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000a2\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000a3\"]"
+      ],
+      "actualKeys": [
+        "[\"5ce00000-0000-4000-8000-0000000000a1\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000a2\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000a3\"]"
+      ],
+      "blindKeys": [],
+      "leakedKeys": [],
+      "missingKeys": [],
+      "statement": "delete from \"public\".\"scenarios\" returning \"id\"::text as k0",
+      "sql": "begin;\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"alice@example.com\",\"role\":\"authenticated\",\"sub\":\"aaaaaaaa-0000-4000-8000-000000000001\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\ndelete from \"public\".\"scenarios\" returning \"id\"::text as k0;\nrollback;\n\n-- The same without WHERE and RETURNING: no SELECT policy applies to it.\nbegin;\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"alice@example.com\",\"role\":\"authenticated\",\"sub\":\"aaaaaaaa-0000-4000-8000-000000000001\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nreset role;\nselect \"id\"::text as k0 from \"public\".\"scenarios\";\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"alice@example.com\",\"role\":\"authenticated\",\"sub\":\"aaaaaaaa-0000-4000-8000-000000000001\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\ndelete from \"public\".\"scenarios\";\nreset role;\nselect \"id\"::text as k0 from \"public\".\"scenarios\";\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"alice@example.com\",\"role\":\"authenticated\",\"sub\":\"aaaaaaaa-0000-4000-8000-000000000001\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nrollback;",
+      "perRowFallback": false,
+      "error": null,
+      "subProbes": [],
+      "policies": [
+        {
+          "name": "scenarios_owner_all",
+          "command": "all",
+          "permissive": true,
+          "roles": [
+            "authenticated"
+          ],
+          "using": "(owner = ( SELECT auth.uid() AS uid))",
+          "withCheck": "(owner = ( SELECT auth.uid() AS uid))",
+          "appliesAs": "command"
+        },
+        {
+          "name": "scenarios_public_read",
+          "command": "select",
+          "permissive": true,
+          "roles": [
+            "anon",
+            "authenticated"
+          ],
+          "using": "(visibility = ANY (ARRAY['public'::text, 'unlisted'::text]))",
+          "withCheck": null,
+          "appliesAs": "visibility"
+        }
+      ],
+      "rlsBypass": null,
+      "status": "pass",
+      "reason": null
+    },
+    {
+      "id": "bob|public.scenarios|select",
+      "personaId": "bob",
+      "schema": "public",
+      "table": "scenarios",
+      "operation": "select",
+      "scope": "custom",
+      "expectationSource": "explicit",
+      "expectedKeys": [
+        "[\"5ce00000-0000-4000-8000-0000000000a1\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000b1\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000b2\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000b3\"]"
+      ],
+      "actualKeys": [
+        "[\"5ce00000-0000-4000-8000-0000000000a1\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000a2\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000b1\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000b2\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000b3\"]"
+      ],
+      "blindKeys": [],
+      "leakedKeys": [
+        "[\"5ce00000-0000-4000-8000-0000000000a2\"]"
+      ],
+      "missingKeys": [],
+      "statement": "select \"id\"::text as k0 from \"public\".\"scenarios\"",
+      "sql": "begin;\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"bob@example.com\",\"role\":\"authenticated\",\"sub\":\"bbbbbbbb-0000-4000-8000-000000000002\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nselect \"id\"::text as k0 from \"public\".\"scenarios\";\nrollback;",
+      "perRowFallback": false,
+      "error": null,
+      "subProbes": [],
+      "policies": [
+        {
+          "name": "scenarios_owner_all",
+          "command": "all",
+          "permissive": true,
+          "roles": [
+            "authenticated"
+          ],
+          "using": "(owner = ( SELECT auth.uid() AS uid))",
+          "withCheck": "(owner = ( SELECT auth.uid() AS uid))",
+          "appliesAs": "command"
+        },
+        {
+          "name": "scenarios_public_read",
+          "command": "select",
+          "permissive": true,
+          "roles": [
+            "anon",
+            "authenticated"
+          ],
+          "using": "(visibility = ANY (ARRAY['public'::text, 'unlisted'::text]))",
+          "withCheck": null,
+          "appliesAs": "command"
+        }
+      ],
+      "rlsBypass": null,
+      "status": "leak",
+      "reason": null
+    },
+    {
+      "id": "bob|public.scenarios|insert",
+      "personaId": "bob",
+      "schema": "public",
+      "table": "scenarios",
+      "operation": "insert",
+      "scope": "own",
+      "expectationSource": "explicit",
+      "expectedKeys": [],
+      "actualKeys": [],
+      "blindKeys": [],
+      "leakedKeys": [],
+      "missingKeys": [],
+      "statement": "",
+      "sql": "",
+      "perRowFallback": false,
+      "error": null,
+      "subProbes": [
+        {
+          "kind": "insert-own",
+          "sourceKey": "[\"5ce00000-0000-4000-8000-0000000000b1\"]",
+          "expected": "allowed",
+          "outcome": "allowed",
+          "status": "pass",
+          "reason": null,
+          "movedKeys": [],
+          "statement": "insert into \"public\".\"scenarios\" (\"id\", \"slug\", \"owner\", \"title\", \"payload\", \"visibility\", \"created_at\", \"updated_at\") select '00000000-0000-4000-8000-000000000001'::uuid, \"slug\", \"owner\", \"title\", \"payload\", \"visibility\", \"created_at\", \"updated_at\" from pg_temp.\"rls_leak_tester_source\"",
+          "sql": "begin;\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"bob@example.com\",\"role\":\"authenticated\",\"sub\":\"bbbbbbbb-0000-4000-8000-000000000002\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nreset role;\ncreate temporary table \"rls_leak_tester_source\" on commit drop as select * from \"public\".\"scenarios\" where \"id\"::text = '5ce00000-0000-4000-8000-0000000000b1';\ngrant select on pg_temp.\"rls_leak_tester_source\" to \"authenticated\";\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"bob@example.com\",\"role\":\"authenticated\",\"sub\":\"bbbbbbbb-0000-4000-8000-000000000002\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\ninsert into \"public\".\"scenarios\" (\"id\", \"slug\", \"owner\", \"title\", \"payload\", \"visibility\", \"created_at\", \"updated_at\") select '00000000-0000-4000-8000-000000000001'::uuid, \"slug\", \"owner\", \"title\", \"payload\", \"visibility\", \"created_at\", \"updated_at\" from pg_temp.\"rls_leak_tester_source\";\nrollback;",
+          "error": null
+        },
+        {
+          "kind": "insert-other",
+          "sourceKey": "[\"5ce00000-0000-4000-8000-0000000000a1\"]",
+          "expected": "blocked",
+          "outcome": "blocked",
+          "status": "pass",
+          "reason": null,
+          "movedKeys": [],
+          "statement": "insert into \"public\".\"scenarios\" (\"id\", \"slug\", \"owner\", \"title\", \"payload\", \"visibility\", \"created_at\", \"updated_at\") select '00000000-0000-4000-8000-000000000001'::uuid, \"slug\", \"owner\", \"title\", \"payload\", \"visibility\", \"created_at\", \"updated_at\" from pg_temp.\"rls_leak_tester_source\"",
+          "sql": "begin;\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"bob@example.com\",\"role\":\"authenticated\",\"sub\":\"bbbbbbbb-0000-4000-8000-000000000002\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nreset role;\ncreate temporary table \"rls_leak_tester_source\" on commit drop as select * from \"public\".\"scenarios\" where \"id\"::text = '5ce00000-0000-4000-8000-0000000000a1';\ngrant select on pg_temp.\"rls_leak_tester_source\" to \"authenticated\";\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"bob@example.com\",\"role\":\"authenticated\",\"sub\":\"bbbbbbbb-0000-4000-8000-000000000002\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\ninsert into \"public\".\"scenarios\" (\"id\", \"slug\", \"owner\", \"title\", \"payload\", \"visibility\", \"created_at\", \"updated_at\") select '00000000-0000-4000-8000-000000000001'::uuid, \"slug\", \"owner\", \"title\", \"payload\", \"visibility\", \"created_at\", \"updated_at\" from pg_temp.\"rls_leak_tester_source\";\nrollback;",
+          "error": {
+            "sqlState": "42501",
+            "message": "new row violates row-level security policy for table \"scenarios\""
+          }
+        }
+      ],
+      "policies": [
+        {
+          "name": "scenarios_owner_all",
+          "command": "all",
+          "permissive": true,
+          "roles": [
+            "authenticated"
+          ],
+          "using": "(owner = ( SELECT auth.uid() AS uid))",
+          "withCheck": "(owner = ( SELECT auth.uid() AS uid))",
+          "appliesAs": "command"
+        }
+      ],
+      "rlsBypass": null,
+      "status": "pass",
+      "reason": null
+    },
+    {
+      "id": "bob|public.scenarios|update",
+      "personaId": "bob",
+      "schema": "public",
+      "table": "scenarios",
+      "operation": "update",
+      "scope": "own",
+      "expectationSource": "explicit",
+      "expectedKeys": [
+        "[\"5ce00000-0000-4000-8000-0000000000b1\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000b2\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000b3\"]"
+      ],
+      "actualKeys": [
+        "[\"5ce00000-0000-4000-8000-0000000000b1\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000b2\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000b3\"]"
+      ],
+      "blindKeys": [],
+      "leakedKeys": [],
+      "missingKeys": [],
+      "statement": "update \"public\".\"scenarios\" set \"slug\" = \"slug\" returning \"id\"::text as k0",
+      "sql": "begin;\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"bob@example.com\",\"role\":\"authenticated\",\"sub\":\"bbbbbbbb-0000-4000-8000-000000000002\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nupdate \"public\".\"scenarios\" set \"slug\" = \"slug\" returning \"id\"::text as k0;\nrollback;\n\n-- Without WHERE and RETURNING, and with a value that does not read the table: no SELECT policy applies to it.\nbegin;\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"bob@example.com\",\"role\":\"authenticated\",\"sub\":\"bbbbbbbb-0000-4000-8000-000000000002\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nreset role;\ncreate temporary table \"rls_leak_tester_source\" on commit drop as select * from \"public\".\"scenarios\" where \"id\"::text = '5ce00000-0000-4000-8000-0000000000a1';\ngrant select on pg_temp.\"rls_leak_tester_source\" to \"authenticated\";\nselect \"id\"::text as k0, tableoid::text || ':' || ctid::text as row_version from \"public\".\"scenarios\";\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"bob@example.com\",\"role\":\"authenticated\",\"sub\":\"bbbbbbbb-0000-4000-8000-000000000002\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nsavepoint rls_probe;\nupdate \"public\".\"scenarios\" set \"slug\" = (select \"slug\" from pg_temp.\"rls_leak_tester_source\");\nrollback to savepoint rls_probe;\nrelease savepoint rls_probe;\nsavepoint rls_probe;\nupdate \"public\".\"scenarios\" set \"title\" = (select \"title\" from pg_temp.\"rls_leak_tester_source\");\nreset role;\nselect \"id\"::text as k0, tableoid::text || ':' || ctid::text as row_version from \"public\".\"scenarios\";\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"bob@example.com\",\"role\":\"authenticated\",\"sub\":\"bbbbbbbb-0000-4000-8000-000000000002\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nrollback to savepoint rls_probe;\nrelease savepoint rls_probe;\nrollback;",
+      "perRowFallback": false,
+      "error": null,
+      "subProbes": [
+        {
+          "kind": "escape-targeted",
+          "expected": "blocked",
+          "sourceKey": "[\"5ce00000-0000-4000-8000-0000000000b1\"]",
+          "outcome": "blocked",
+          "status": "pass",
+          "reason": null,
+          "movedKeys": [],
+          "statement": "update \"public\".\"scenarios\" set \"owner\" = 'aaaaaaaa-0000-4000-8000-000000000001'::uuid where \"id\"::text = '5ce00000-0000-4000-8000-0000000000b1' returning \"id\"::text as k0",
+          "sql": "begin;\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"bob@example.com\",\"role\":\"authenticated\",\"sub\":\"bbbbbbbb-0000-4000-8000-000000000002\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nupdate \"public\".\"scenarios\" set \"owner\" = 'aaaaaaaa-0000-4000-8000-000000000001'::uuid where \"id\"::text = '5ce00000-0000-4000-8000-0000000000b1' returning \"id\"::text as k0;\nrollback;",
+          "error": {
+            "sqlState": "42501",
+            "message": "new row violates row-level security policy for table \"scenarios\""
+          }
+        },
+        {
+          "kind": "escape-bulk",
+          "expected": "blocked",
+          "sourceKey": "[\"5ce00000-0000-4000-8000-0000000000b1\"]",
+          "outcome": "blocked",
+          "status": "pass",
+          "reason": null,
+          "movedKeys": [],
+          "statement": "update \"public\".\"scenarios\" set \"owner\" = 'aaaaaaaa-0000-4000-8000-000000000001'::uuid",
+          "sql": "begin;\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"bob@example.com\",\"role\":\"authenticated\",\"sub\":\"bbbbbbbb-0000-4000-8000-000000000002\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nupdate \"public\".\"scenarios\" set \"owner\" = 'aaaaaaaa-0000-4000-8000-000000000001'::uuid;\nrollback;",
+          "error": {
+            "sqlState": "42501",
+            "message": "new row violates row-level security policy for table \"scenarios\""
+          }
+        }
+      ],
+      "policies": [
+        {
+          "name": "scenarios_owner_all",
+          "command": "all",
+          "permissive": true,
+          "roles": [
+            "authenticated"
+          ],
+          "using": "(owner = ( SELECT auth.uid() AS uid))",
+          "withCheck": "(owner = ( SELECT auth.uid() AS uid))",
+          "appliesAs": "command"
+        },
+        {
+          "name": "scenarios_public_read",
+          "command": "select",
+          "permissive": true,
+          "roles": [
+            "anon",
+            "authenticated"
+          ],
+          "using": "(visibility = ANY (ARRAY['public'::text, 'unlisted'::text]))",
+          "withCheck": null,
+          "appliesAs": "visibility"
+        }
+      ],
+      "rlsBypass": null,
+      "status": "pass",
+      "reason": null
+    },
+    {
+      "id": "bob|public.scenarios|delete",
+      "personaId": "bob",
+      "schema": "public",
+      "table": "scenarios",
+      "operation": "delete",
+      "scope": "own",
+      "expectationSource": "explicit",
+      "expectedKeys": [
+        "[\"5ce00000-0000-4000-8000-0000000000b1\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000b2\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000b3\"]"
+      ],
+      "actualKeys": [
+        "[\"5ce00000-0000-4000-8000-0000000000b1\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000b2\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000b3\"]"
+      ],
+      "blindKeys": [],
+      "leakedKeys": [],
+      "missingKeys": [],
+      "statement": "delete from \"public\".\"scenarios\" returning \"id\"::text as k0",
+      "sql": "begin;\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"bob@example.com\",\"role\":\"authenticated\",\"sub\":\"bbbbbbbb-0000-4000-8000-000000000002\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\ndelete from \"public\".\"scenarios\" returning \"id\"::text as k0;\nrollback;\n\n-- The same without WHERE and RETURNING: no SELECT policy applies to it.\nbegin;\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"bob@example.com\",\"role\":\"authenticated\",\"sub\":\"bbbbbbbb-0000-4000-8000-000000000002\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nreset role;\nselect \"id\"::text as k0 from \"public\".\"scenarios\";\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"bob@example.com\",\"role\":\"authenticated\",\"sub\":\"bbbbbbbb-0000-4000-8000-000000000002\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\ndelete from \"public\".\"scenarios\";\nreset role;\nselect \"id\"::text as k0 from \"public\".\"scenarios\";\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"bob@example.com\",\"role\":\"authenticated\",\"sub\":\"bbbbbbbb-0000-4000-8000-000000000002\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nrollback;",
+      "perRowFallback": false,
+      "error": null,
+      "subProbes": [],
+      "policies": [
+        {
+          "name": "scenarios_owner_all",
+          "command": "all",
+          "permissive": true,
+          "roles": [
+            "authenticated"
+          ],
+          "using": "(owner = ( SELECT auth.uid() AS uid))",
+          "withCheck": "(owner = ( SELECT auth.uid() AS uid))",
+          "appliesAs": "command"
+        },
+        {
+          "name": "scenarios_public_read",
+          "command": "select",
+          "permissive": true,
+          "roles": [
+            "anon",
+            "authenticated"
+          ],
+          "using": "(visibility = ANY (ARRAY['public'::text, 'unlisted'::text]))",
+          "withCheck": null,
+          "appliesAs": "visibility"
+        }
+      ],
+      "rlsBypass": null,
+      "status": "pass",
+      "reason": null
+    },
+    {
+      "id": "carol|public.scenarios|select",
+      "personaId": "carol",
+      "schema": "public",
+      "table": "scenarios",
+      "operation": "select",
+      "scope": "custom",
+      "expectationSource": "explicit",
+      "expectedKeys": [
+        "[\"5ce00000-0000-4000-8000-0000000000a1\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000b1\"]"
+      ],
+      "actualKeys": [
+        "[\"5ce00000-0000-4000-8000-0000000000a1\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000a2\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000b1\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000b2\"]"
+      ],
+      "blindKeys": [],
+      "leakedKeys": [
+        "[\"5ce00000-0000-4000-8000-0000000000a2\"]",
+        "[\"5ce00000-0000-4000-8000-0000000000b2\"]"
+      ],
+      "missingKeys": [],
+      "statement": "select \"id\"::text as k0 from \"public\".\"scenarios\"",
+      "sql": "begin;\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"carol@example.com\",\"role\":\"authenticated\",\"sub\":\"cccccccc-0000-4000-8000-000000000003\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nselect \"id\"::text as k0 from \"public\".\"scenarios\";\nrollback;",
+      "perRowFallback": false,
+      "error": null,
+      "subProbes": [],
+      "policies": [
+        {
+          "name": "scenarios_owner_all",
+          "command": "all",
+          "permissive": true,
+          "roles": [
+            "authenticated"
+          ],
+          "using": "(owner = ( SELECT auth.uid() AS uid))",
+          "withCheck": "(owner = ( SELECT auth.uid() AS uid))",
+          "appliesAs": "command"
+        },
+        {
+          "name": "scenarios_public_read",
+          "command": "select",
+          "permissive": true,
+          "roles": [
+            "anon",
+            "authenticated"
+          ],
+          "using": "(visibility = ANY (ARRAY['public'::text, 'unlisted'::text]))",
+          "withCheck": null,
+          "appliesAs": "command"
+        }
+      ],
+      "rlsBypass": null,
+      "status": "leak",
+      "reason": null
+    },
+    {
+      "id": "carol|public.scenarios|insert",
+      "personaId": "carol",
+      "schema": "public",
+      "table": "scenarios",
+      "operation": "insert",
+      "scope": "own",
+      "expectationSource": "explicit",
+      "expectedKeys": [],
+      "actualKeys": [],
+      "blindKeys": [],
+      "leakedKeys": [],
+      "missingKeys": [],
+      "statement": "",
+      "sql": "",
+      "perRowFallback": false,
+      "error": null,
+      "subProbes": [
+        {
+          "kind": "insert-other",
+          "sourceKey": "[\"5ce00000-0000-4000-8000-0000000000a1\"]",
+          "expected": "blocked",
+          "outcome": "blocked",
+          "status": "pass",
+          "reason": null,
+          "movedKeys": [],
+          "statement": "insert into \"public\".\"scenarios\" (\"id\", \"slug\", \"owner\", \"title\", \"payload\", \"visibility\", \"created_at\", \"updated_at\") select '00000000-0000-4000-8000-000000000001'::uuid, \"slug\", \"owner\", \"title\", \"payload\", \"visibility\", \"created_at\", \"updated_at\" from pg_temp.\"rls_leak_tester_source\"",
+          "sql": "begin;\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"carol@example.com\",\"role\":\"authenticated\",\"sub\":\"cccccccc-0000-4000-8000-000000000003\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nreset role;\ncreate temporary table \"rls_leak_tester_source\" on commit drop as select * from \"public\".\"scenarios\" where \"id\"::text = '5ce00000-0000-4000-8000-0000000000a1';\ngrant select on pg_temp.\"rls_leak_tester_source\" to \"authenticated\";\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"carol@example.com\",\"role\":\"authenticated\",\"sub\":\"cccccccc-0000-4000-8000-000000000003\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\ninsert into \"public\".\"scenarios\" (\"id\", \"slug\", \"owner\", \"title\", \"payload\", \"visibility\", \"created_at\", \"updated_at\") select '00000000-0000-4000-8000-000000000001'::uuid, \"slug\", \"owner\", \"title\", \"payload\", \"visibility\", \"created_at\", \"updated_at\" from pg_temp.\"rls_leak_tester_source\";\nrollback;",
+          "error": {
+            "sqlState": "42501",
+            "message": "new row violates row-level security policy for table \"scenarios\""
+          }
+        }
+      ],
+      "policies": [
+        {
+          "name": "scenarios_owner_all",
+          "command": "all",
+          "permissive": true,
+          "roles": [
+            "authenticated"
+          ],
+          "using": "(owner = ( SELECT auth.uid() AS uid))",
+          "withCheck": "(owner = ( SELECT auth.uid() AS uid))",
+          "appliesAs": "command"
+        }
+      ],
+      "rlsBypass": null,
+      "status": "pass",
+      "reason": null
+    },
+    {
+      "id": "carol|public.scenarios|update",
+      "personaId": "carol",
+      "schema": "public",
+      "table": "scenarios",
+      "operation": "update",
+      "scope": "own",
+      "expectationSource": "explicit",
+      "expectedKeys": [],
+      "actualKeys": [],
+      "blindKeys": [],
+      "leakedKeys": [],
+      "missingKeys": [],
+      "statement": "update \"public\".\"scenarios\" set \"slug\" = \"slug\" returning \"id\"::text as k0",
+      "sql": "begin;\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"carol@example.com\",\"role\":\"authenticated\",\"sub\":\"cccccccc-0000-4000-8000-000000000003\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nupdate \"public\".\"scenarios\" set \"slug\" = \"slug\" returning \"id\"::text as k0;\nrollback;\n\n-- Without WHERE and RETURNING, and with a value that does not read the table: no SELECT policy applies to it.\nbegin;\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"carol@example.com\",\"role\":\"authenticated\",\"sub\":\"cccccccc-0000-4000-8000-000000000003\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nreset role;\ncreate temporary table \"rls_leak_tester_source\" on commit drop as select * from \"public\".\"scenarios\" where \"id\"::text = '5ce00000-0000-4000-8000-0000000000a1';\ngrant select on pg_temp.\"rls_leak_tester_source\" to \"authenticated\";\nselect \"id\"::text as k0, tableoid::text || ':' || ctid::text as row_version from \"public\".\"scenarios\";\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"carol@example.com\",\"role\":\"authenticated\",\"sub\":\"cccccccc-0000-4000-8000-000000000003\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nsavepoint rls_probe;\nupdate \"public\".\"scenarios\" set \"slug\" = (select \"slug\" from pg_temp.\"rls_leak_tester_source\");\nreset role;\nselect \"id\"::text as k0, tableoid::text || ':' || ctid::text as row_version from \"public\".\"scenarios\";\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"carol@example.com\",\"role\":\"authenticated\",\"sub\":\"cccccccc-0000-4000-8000-000000000003\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nrollback to savepoint rls_probe;\nrelease savepoint rls_probe;\nrollback;",
+      "perRowFallback": false,
+      "error": null,
+      "subProbes": [
+        {
+          "kind": "escape-targeted",
+          "expected": "blocked",
+          "sourceKey": null,
+          "outcome": "skipped",
+          "status": "skipped",
+          "reason": "The persona can update no row inside its scope, so there is nothing to move.",
+          "movedKeys": [],
+          "statement": "",
+          "sql": "",
+          "error": null
+        },
+        {
+          "kind": "escape-bulk",
+          "expected": "blocked",
+          "sourceKey": null,
+          "outcome": "skipped",
+          "status": "skipped",
+          "reason": "The persona can update no row inside its scope, so there is nothing to move.",
+          "movedKeys": [],
+          "statement": "",
+          "sql": "",
+          "error": null
+        }
+      ],
+      "policies": [
+        {
+          "name": "scenarios_owner_all",
+          "command": "all",
+          "permissive": true,
+          "roles": [
+            "authenticated"
+          ],
+          "using": "(owner = ( SELECT auth.uid() AS uid))",
+          "withCheck": "(owner = ( SELECT auth.uid() AS uid))",
+          "appliesAs": "command"
+        },
+        {
+          "name": "scenarios_public_read",
+          "command": "select",
+          "permissive": true,
+          "roles": [
+            "anon",
+            "authenticated"
+          ],
+          "using": "(visibility = ANY (ARRAY['public'::text, 'unlisted'::text]))",
+          "withCheck": null,
+          "appliesAs": "visibility"
+        }
+      ],
+      "rlsBypass": null,
+      "status": "pass",
+      "reason": null
+    },
+    {
+      "id": "carol|public.scenarios|delete",
+      "personaId": "carol",
+      "schema": "public",
+      "table": "scenarios",
+      "operation": "delete",
+      "scope": "own",
+      "expectationSource": "explicit",
+      "expectedKeys": [],
+      "actualKeys": [],
+      "blindKeys": [],
+      "leakedKeys": [],
+      "missingKeys": [],
+      "statement": "delete from \"public\".\"scenarios\" returning \"id\"::text as k0",
+      "sql": "begin;\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"carol@example.com\",\"role\":\"authenticated\",\"sub\":\"cccccccc-0000-4000-8000-000000000003\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\ndelete from \"public\".\"scenarios\" returning \"id\"::text as k0;\nrollback;\n\n-- The same without WHERE and RETURNING: no SELECT policy applies to it.\nbegin;\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"carol@example.com\",\"role\":\"authenticated\",\"sub\":\"cccccccc-0000-4000-8000-000000000003\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nreset role;\nselect \"id\"::text as k0 from \"public\".\"scenarios\";\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"carol@example.com\",\"role\":\"authenticated\",\"sub\":\"cccccccc-0000-4000-8000-000000000003\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\ndelete from \"public\".\"scenarios\";\nreset role;\nselect \"id\"::text as k0 from \"public\".\"scenarios\";\nselect set_config('role', 'authenticated', true);\nselect set_config('request.jwt.claims', '{\"email\":\"carol@example.com\",\"role\":\"authenticated\",\"sub\":\"cccccccc-0000-4000-8000-000000000003\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nrollback;",
+      "perRowFallback": false,
+      "error": null,
+      "subProbes": [],
+      "policies": [
+        {
+          "name": "scenarios_owner_all",
+          "command": "all",
+          "permissive": true,
+          "roles": [
+            "authenticated"
+          ],
+          "using": "(owner = ( SELECT auth.uid() AS uid))",
+          "withCheck": "(owner = ( SELECT auth.uid() AS uid))",
+          "appliesAs": "command"
+        },
+        {
+          "name": "scenarios_public_read",
+          "command": "select",
+          "permissive": true,
+          "roles": [
+            "anon",
+            "authenticated"
+          ],
+          "using": "(visibility = ANY (ARRAY['public'::text, 'unlisted'::text]))",
+          "withCheck": null,
+          "appliesAs": "visibility"
+        }
+      ],
+      "rlsBypass": null,
+      "status": "pass",
+      "reason": null
+    },
+    {
+      "id": "service|public.scenarios|select",
+      "personaId": "service",
+      "schema": "public",
+      "table": "scenarios",
+      "operation": "select",
+      "scope": "none",
+      "expectationSource": "explicit",
+      "expectedKeys": [],
+      "actualKeys": [],
+      "blindKeys": [],
+      "leakedKeys": [],
+      "missingKeys": [],
+      "statement": "select \"id\"::text as k0 from \"public\".\"scenarios\"",
+      "sql": "begin;\nselect set_config('role', 'service_role', true);\nselect set_config('request.jwt.claims', '{\"role\":\"service_role\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nselect \"id\"::text as k0 from \"public\".\"scenarios\";\nrollback;\n\n-- The key is not selectable. Can the role read the rows through another column?\nbegin;\nselect set_config('role', 'service_role', true);\nselect set_config('request.jwt.claims', '{\"role\":\"service_role\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nselect count(*)::text as visible_rows from \"public\".\"scenarios\";\nrollback;",
+      "perRowFallback": false,
+      "error": {
+        "sqlState": "42501",
+        "message": "permission denied for table scenarios"
+      },
+      "subProbes": [],
+      "policies": [],
+      "rlsBypass": "bypassrls",
+      "status": "pass",
+      "reason": null
+    },
+    {
+      "id": "service|public.scenarios|insert",
+      "personaId": "service",
+      "schema": "public",
+      "table": "scenarios",
+      "operation": "insert",
+      "scope": "none",
+      "expectationSource": "explicit",
+      "expectedKeys": [],
+      "actualKeys": [],
+      "blindKeys": [],
+      "leakedKeys": [],
+      "missingKeys": [],
+      "statement": "",
+      "sql": "",
+      "perRowFallback": false,
+      "error": null,
+      "subProbes": [
+        {
+          "kind": "insert-other",
+          "sourceKey": "[\"5ce00000-0000-4000-8000-0000000000a1\"]",
+          "expected": "blocked",
+          "outcome": "blocked",
+          "status": "pass",
+          "reason": null,
+          "movedKeys": [],
+          "statement": "insert into \"public\".\"scenarios\" (\"id\", \"slug\", \"owner\", \"title\", \"payload\", \"visibility\", \"created_at\", \"updated_at\") select '00000000-0000-4000-8000-000000000001'::uuid, \"slug\", \"owner\", \"title\", \"payload\", \"visibility\", \"created_at\", \"updated_at\" from pg_temp.\"rls_leak_tester_source\"",
+          "sql": "begin;\nselect set_config('role', 'service_role', true);\nselect set_config('request.jwt.claims', '{\"role\":\"service_role\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nreset role;\ncreate temporary table \"rls_leak_tester_source\" on commit drop as select * from \"public\".\"scenarios\" where \"id\"::text = '5ce00000-0000-4000-8000-0000000000a1';\ngrant select on pg_temp.\"rls_leak_tester_source\" to \"service_role\";\nselect set_config('role', 'service_role', true);\nselect set_config('request.jwt.claims', '{\"role\":\"service_role\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\ninsert into \"public\".\"scenarios\" (\"id\", \"slug\", \"owner\", \"title\", \"payload\", \"visibility\", \"created_at\", \"updated_at\") select '00000000-0000-4000-8000-000000000001'::uuid, \"slug\", \"owner\", \"title\", \"payload\", \"visibility\", \"created_at\", \"updated_at\" from pg_temp.\"rls_leak_tester_source\";\nrollback;",
+          "error": {
+            "sqlState": "42501",
+            "message": "permission denied for table scenarios"
+          }
+        }
+      ],
+      "policies": [],
+      "rlsBypass": "bypassrls",
+      "status": "pass",
+      "reason": null
+    },
+    {
+      "id": "service|public.scenarios|update",
+      "personaId": "service",
+      "schema": "public",
+      "table": "scenarios",
+      "operation": "update",
+      "scope": "none",
+      "expectationSource": "explicit",
+      "expectedKeys": [],
+      "actualKeys": [],
+      "blindKeys": [],
+      "leakedKeys": [],
+      "missingKeys": [],
+      "statement": "update \"public\".\"scenarios\" set \"slug\" = \"slug\" returning \"id\"::text as k0",
+      "sql": "begin;\nselect set_config('role', 'service_role', true);\nselect set_config('request.jwt.claims', '{\"role\":\"service_role\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nupdate \"public\".\"scenarios\" set \"slug\" = \"slug\" returning \"id\"::text as k0;\nrollback;",
+      "perRowFallback": false,
+      "error": {
+        "sqlState": "42501",
+        "message": "permission denied for table scenarios"
+      },
+      "subProbes": [
+        {
+          "kind": "escape-targeted",
+          "expected": "blocked",
+          "sourceKey": null,
+          "outcome": "skipped",
+          "status": "skipped",
+          "reason": "No row is inside scope \"none\": there is nothing to move.",
+          "movedKeys": [],
+          "statement": "",
+          "sql": "",
+          "error": null
+        },
+        {
+          "kind": "escape-bulk",
+          "expected": "blocked",
+          "sourceKey": null,
+          "outcome": "skipped",
+          "status": "skipped",
+          "reason": "No row is inside scope \"none\": there is nothing to move.",
+          "movedKeys": [],
+          "statement": "",
+          "sql": "",
+          "error": null
+        }
+      ],
+      "policies": [],
+      "rlsBypass": "bypassrls",
+      "status": "pass",
+      "reason": null
+    },
+    {
+      "id": "service|public.scenarios|delete",
+      "personaId": "service",
+      "schema": "public",
+      "table": "scenarios",
+      "operation": "delete",
+      "scope": "none",
+      "expectationSource": "explicit",
+      "expectedKeys": [],
+      "actualKeys": [],
+      "blindKeys": [],
+      "leakedKeys": [],
+      "missingKeys": [],
+      "statement": "delete from \"public\".\"scenarios\" returning \"id\"::text as k0",
+      "sql": "begin;\nselect set_config('role', 'service_role', true);\nselect set_config('request.jwt.claims', '{\"role\":\"service_role\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\ndelete from \"public\".\"scenarios\" returning \"id\"::text as k0;\nrollback;\n\n-- The same without WHERE and RETURNING: no SELECT policy applies to it.\nbegin;\nselect set_config('role', 'service_role', true);\nselect set_config('request.jwt.claims', '{\"role\":\"service_role\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\nreset role;\nselect \"id\"::text as k0 from \"public\".\"scenarios\";\nselect set_config('role', 'service_role', true);\nselect set_config('request.jwt.claims', '{\"role\":\"service_role\"}', true);\nselect set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claim.role', '', true), set_config('request.jwt.claim.email', '', true), set_config('request.jwt.claim', '', true), set_config('row_security', 'on', true), set_config('TimeZone', 'UTC', true);\nselect current_user::text as role, session_user::text as session_role, current_setting('row_security') as row_security;\ndelete from \"public\".\"scenarios\";\nrollback;",
+      "perRowFallback": false,
+      "error": {
+        "sqlState": "42501",
+        "message": "permission denied for table scenarios"
+      },
+      "subProbes": [],
+      "policies": [],
+      "rlsBypass": "bypassrls",
+      "status": "pass",
+      "reason": null
+    }
+  ],
+  "orphanExpectations": []
+}

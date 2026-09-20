@@ -245,6 +245,21 @@ describe("blindUpdateColumns", () => {
     expect(blindUpdateColumns(table, new Set(["doubled"]), scope)).toEqual([]);
     expect(blindUpdateColumns(table, new Set())).toEqual([]);
   });
+
+  it("for the CI export: ungranted writable columns follow the granted ones, within the cap", () => {
+    expect(blindUpdateColumns(table, new Set(), scope, true)).toEqual(["title", "body", "extra"]);
+    expect(blindUpdateColumns(table, new Set(["id"]), scope, true)).toEqual([
+      "id",
+      "title",
+      "body",
+    ]);
+    expect(blindUpdateColumns(table, new Set(["owner_id", "extra"]), scope, true)).toEqual([
+      "extra",
+      "owner_id",
+      "title",
+    ]);
+    expect(blindUpdateColumns(table, new Set(["doubled"]), scope, true)).not.toContain("doubled");
+  });
 });
 
 describe("pullMoves", () => {

@@ -94,10 +94,12 @@ import type { SqlEngine, SqlQueryResult } from "./types";
 export const EMPTY_TABLE_REMARK =
   "The table has no seeded rows, so there is nothing a probe could reach or miss. Seed rows to prove something.";
 
-/** Everything a cell needs; assembled by the matrix runner. */
-export interface CellContext {
-  readonly engine: SqlEngine;
-  readonly executor: ProbeExecutor;
+/**
+ * What the probes of a cell are planned from, without the database. The matrix runner returns one
+ * per probed cell (`MatrixRun.cellContexts`), so that the CI export plans the same probes from the
+ * same facts instead of deriving them a second time.
+ */
+export interface CellPlanContext {
   readonly identity: ProbeIdentity;
   readonly facts: PersonaFacts;
   /** The rows that are the persona's own and its tenant's, decided by Postgres. */
@@ -112,6 +114,12 @@ export interface CellContext {
   readonly updatableColumns: ReadonlySet<string>;
   /** Columns the role holds SELECT on (update cells only). */
   readonly selectableColumns: ReadonlySet<string>;
+}
+
+/** Everything a cell needs; assembled by the matrix runner. */
+export interface CellContext extends CellPlanContext {
+  readonly engine: SqlEngine;
+  readonly executor: ProbeExecutor;
 }
 
 export interface CellOutcome {
@@ -503,6 +511,13 @@ async function runSubProbe(
 // UPDATE: reach (visible, row by row with takeover, blind) plus the scope-escape shapes
 // ---------------------------------------------------------------------------------------------
 
+/** The seeded rows that carry the foreign value already: the bulk escape did not move those. */
+export function rowsCarrying(truth: GroundTruthSnapshot, move: EscapePlan["move"]): string[] {
+  return truth.rows
+    .filter((row) => (move.column === truth.tenantColumn ? row.tenant : row.owner) === move.value)
+    .map((row) => row.key);
+}
+
 /** One escape plan runs as two sub-probes (ADR 0002 claim 6), or is skipped as two. */
 async function escapePair(context: CellContext, plan: Planned<EscapePlan>): Promise<RanSubProbe[]> {
   const { truth } = context;
@@ -513,11 +528,7 @@ async function escapePair(context: CellContext, plan: Planned<EscapePlan>): Prom
     }));
   }
   const { sourceKey, move } = plan;
-  const before = new Set(
-    truth.rows
-      .filter((row) => (move.column === truth.tenantColumn ? row.tenant : row.owner) === move.value)
-      .map((row) => row.key),
-  );
+  const before = new Set(rowsCarrying(truth, move));
 
   const targeted = await runSubProbe(
     context,
@@ -553,18 +564,32 @@ async function escapePair(context: CellContext, plan: Planned<EscapePlan>): Prom
   return [targeted, bulk];
 }
 
-async function escapeSubProbes(context: CellContext, reach: Reach): Promise<RanSubProbe[]> {
+/**
+ * The escape plans of an UPDATE cell, in the order they run: the move of the column that defines
+ * the scope, then (scope `own` only) the move of the tenant column. `reachableKeys` are the rows
+ * the reach probe really reached.
+ */
+export function planEscapes(
+  context: CellPlanContext,
+  reachableKeys: readonly string[],
+): Planned<EscapePlan>[] {
   const input: EscapeInput = {
     scope: context.expectation.scope,
     table: context.table,
     truth: context.truth,
     expectedKeys: context.expectedKeys,
-    reachableKeys: reach.actualKeys,
+    reachableKeys,
   };
-  const ran = await escapePair(context, planEscape(input));
   const tenantMove = planTenantEscape(input, context.facts, context.membership.tenant);
-  if (tenantMove !== null && !ran.some((probe) => probe.databaseLost)) {
-    ran.push(...(await escapePair(context, tenantMove)));
+  return tenantMove === null ? [planEscape(input)] : [planEscape(input), tenantMove];
+}
+
+async function escapeSubProbes(context: CellContext, reach: Reach): Promise<RanSubProbe[]> {
+  const ran: RanSubProbe[] = [];
+  for (const plan of planEscapes(context, reach.actualKeys)) {
+    if (!ran.some((probe) => probe.databaseLost)) {
+      ran.push(...(await escapePair(context, plan)));
+    }
   }
   return ran;
 }
@@ -589,24 +614,54 @@ function touchedKeys(
  * takeover variants. The first statement that goes through is the measurement. With none, a
  * 42501 among the answers means refused; only constraint errors means nothing was measured.
  */
-async function blindUpdate(context: CellContext, visible: Reach): Promise<Reach> {
+/** The statements of the blind UPDATE: the source row, the constants, then the takeovers. */
+export interface BlindUpdatePlan {
+  /** The seeded row whose values the constants are read from. */
+  readonly sourceKey: string;
+  readonly constants: readonly Probe[];
+  readonly pulls: readonly Probe[];
+}
+
+/**
+ * `null`: the role holds UPDATE on no writable column, or the table has no row to read from.
+ *
+ * `alsoUngranted` (the CI export): columns the role holds no UPDATE on are planned as well, after
+ * the granted ones, so the exported check measures a grant that a later migration adds. Then
+ * `null` means: no writable column at all, or no row.
+ */
+export function planBlindUpdate(
+  context: Pick<CellPlanContext, "table" | "truth" | "facts" | "updatableColumns">,
+  alsoUngranted = false,
+): BlindUpdatePlan | null {
   const { truth, table } = context;
   const scopeColumns = new Set([truth.ownerColumn, truth.tenantColumn]);
-  const constants = blindUpdateColumns(table, context.updatableColumns, scopeColumns).map(
-    (column) => updateBlindProbe(truth, column),
-  );
+  const constants = blindUpdateColumns(
+    table,
+    context.updatableColumns,
+    scopeColumns,
+    alsoUngranted,
+  ).map((column) => updateBlindProbe(truth, column));
   const pulls = pullMoves(table, truth, context.facts).map((moves) => pullBlindProbe(truth, moves));
   const source = truth.rows[0];
-  if (constants.length === 0 || source === undefined || !canGoBlind(context, visible)) {
+  return constants.length === 0 || source === undefined
+    ? null
+    : { sourceKey: source.key, constants, pulls };
+}
+
+async function blindUpdate(context: CellContext, visible: Reach): Promise<Reach> {
+  const { truth } = context;
+  const plan = planBlindUpdate(context);
+  if (plan === null || !canGoBlind(context, visible)) {
     return visible;
   }
+  const { constants, pulls } = plan;
   const versions = rowVersionsProbe(truth);
   const run = await context.executor(
     context.engine,
     context.identity,
     async (session): Promise<Blind> => {
       const before = await session.asSuperuser(
-        sourceCopyProbe(truth, source.key),
+        sourceCopyProbe(truth, plan.sourceKey),
         sourceGrantProbe(context.identity.role),
         versions,
       );
@@ -637,7 +692,10 @@ async function blindUpdate(context: CellContext, visible: Reach): Promise<Reach>
   );
 }
 
-export async function updateCell(context: CellContext): Promise<CellOutcome> {
+/** The column of the no-op UPDATE (`set col = col`); `null` when no column can be written. */
+export function updateReachColumn(
+  context: Pick<CellPlanContext, "table" | "truth" | "updatableColumns" | "selectableColumns">,
+): string | null {
   const { truth, table } = context;
   const scopeColumns = new Set([truth.ownerColumn, truth.tenantColumn]);
   const readable = new Set(
@@ -645,17 +703,26 @@ export async function updateCell(context: CellContext): Promise<CellOutcome> {
   );
   // `set col = col` reads the column: it needs SELECT too. Without such a column any granted
   // one is named, so that the 42501 is observed; the blind shape then measures the rows.
-  const column = chooseUpdateColumn(
+  return chooseUpdateColumn(
     table,
     readable.size > 0 ? readable : context.updatableColumns,
     scopeColumns,
   );
+}
+
+/** Why an UPDATE cell is skipped when `updateReachColumn` finds no column. */
+export const NO_WRITABLE_COLUMN_REMARK =
+  "Every column of the table is generated, so no UPDATE can be written.";
+
+export async function updateCell(context: CellContext): Promise<CellOutcome> {
+  const { truth, table } = context;
+  const column = updateReachColumn(context);
   if (column === null) {
     return {
       cell: {
         ...cellBase(context.expectation, context.policies, context.rlsBypass),
         status: "skipped",
-        reason: "Every column of the table is generated, so no UPDATE can be written.",
+        reason: NO_WRITABLE_COLUMN_REMARK,
       },
       databaseLost: false,
     };
@@ -704,13 +771,21 @@ function failedSubProbe(
   };
 }
 
+/** The insert of a clone of the source row under `freshKey`; the same statement for every class. */
+export function insertProbeOf(
+  context: Pick<CellPlanContext, "table" | "truth">,
+  freshKey: FreshKeyPlan,
+): Probe {
+  const columns = cloneColumns(context.table, freshKey).map((column) => column.name);
+  return insertCloneProbe(context.truth, columns, freshKey.value);
+}
+
 function insertSubProbe(
   context: CellContext,
   plan: InsertClassPlan,
   freshKey: FreshKeyPlan,
 ): Promise<RanSubProbe> {
-  const columns = cloneColumns(context.table, freshKey).map((column) => column.name);
-  const insert = insertCloneProbe(context.truth, columns, freshKey.value);
+  const insert = insertProbeOf(context, freshKey);
   return runSubProbe(context, plan, insert, async (session, probe) => {
     // The superuser lays the seeded row out for the persona; the persona inserts its clone.
     await session.asSuperuser(
@@ -729,6 +804,9 @@ function insertSubProbe(
   });
 }
 
+/** Why an INSERT cell is skipped when the ground truth holds no row to clone. */
+export const NO_ROW_TO_CLONE_REMARK = "The table has no seeded row to clone.";
+
 export async function insertCell(context: CellContext): Promise<CellOutcome> {
   const base = cellBase(context.expectation, context.policies, context.rlsBypass);
   const plans = planInsertClasses(
@@ -740,7 +818,7 @@ export async function insertCell(context: CellContext): Promise<CellOutcome> {
   );
   if (plans.length === 0) {
     return {
-      cell: { ...base, status: "skipped", reason: "The table has no seeded row to clone." },
+      cell: { ...base, status: "skipped", reason: NO_ROW_TO_CLONE_REMARK },
       databaseLost: false,
     };
   }

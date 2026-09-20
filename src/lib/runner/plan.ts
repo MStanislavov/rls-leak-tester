@@ -229,25 +229,31 @@ export const BLIND_UPDATE_CANDIDATES = 3;
  * UPDATE only. The same preference as above; key columns come last, because one value for every
  * reachable row collides (23505) as soon as two rows are reachable. A column whose constant
  * breaks a constraint is followed by the next one.
+ *
+ * `alsoUngranted` is for the CI export, which must still measure after a later migration granted
+ * UPDATE: the writable columns the role holds NO update privilege on follow the granted ones, in
+ * the same preference, within the same cap. Today they answer 42501, which is no finding.
  */
 export function blindUpdateColumns(
   table: Pick<CatalogTable, "columns" | "primaryKey">,
   updatable: ReadonlySet<string>,
   scopeColumns: ReadonlySet<string | null> = new Set(),
+  alsoUngranted = false,
 ): string[] {
-  const granted = table.columns.filter(
-    (column) => isWritable(column) && updatable.has(column.name),
-  );
+  const writable = table.columns.filter(isWritable);
   const rank = (column: CatalogColumn): number => {
     if (table.primaryKey.includes(column.name)) {
       return 2;
     }
     return scopeColumns.has(column.name) ? 1 : 0;
   };
-  return [0, 1, 2]
-    .flatMap((wanted) => granted.filter((column) => rank(column) === wanted))
-    .slice(0, BLIND_UPDATE_CANDIDATES)
-    .map((column) => column.name);
+  const ranked = (columns: readonly CatalogColumn[]): CatalogColumn[] =>
+    [0, 1, 2].flatMap((wanted) => columns.filter((column) => rank(column) === wanted));
+  const granted = ranked(writable.filter((column) => updatable.has(column.name)));
+  const ungranted = alsoUngranted
+    ? ranked(writable.filter((column) => !updatable.has(column.name)))
+    : [];
+  return [...granted, ...ungranted].slice(0, BLIND_UPDATE_CANDIDATES).map((column) => column.name);
 }
 
 /**

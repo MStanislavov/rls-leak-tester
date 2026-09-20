@@ -23,6 +23,9 @@ export type {
 } from "./result";
 
 export {
+  NOT_ABOUT_THE_ROWS,
+  ROW_SECURITY_VIOLATION,
+  STATEMENT_DENIAL,
   STATUS_SEVERITY,
   classifyCell,
   classifyInsertCell,
@@ -127,4 +130,24 @@ export type {
   ProbeExecutorOptions,
 } from "./executor";
 
-export { EMPTY_TABLE_REMARK, cellId } from "./cells";
+export {
+  EMPTY_TABLE_REMARK,
+  NO_ROW_TO_CLONE_REMARK,
+  NO_WRITABLE_COLUMN_REMARK,
+  cellId,
+  insertProbeOf,
+  planBlindUpdate,
+  planEscapes,
+  rowsCarrying,
+  updateReachColumn,
+} from "./cells";
+export type { BlindUpdatePlan, CellPlanContext } from "./cells";
+
+export {
+  PIN_TIME_ZONE,
+  RESET_SESSION,
+  exposedSchemasOf,
+  supabaseGrantsOf,
+  supabasePrelude,
+} from "./setup";
+export type { SupabaseSetupSql } from "./setup";

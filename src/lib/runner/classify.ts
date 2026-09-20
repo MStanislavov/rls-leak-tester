@@ -71,9 +71,20 @@ export function toProbeFailure(error: unknown): ProbeFailure {
   return { sqlState: null, message: error instanceof Error ? error.message : String(error) };
 }
 
-/** 42501 texts that are not about the probed rows, see the header. Postgres messages, lc_messages C. */
-const NOT_ABOUT_THE_ROWS =
+/**
+ * 42501 texts that are not about the probed rows, see the header. Postgres messages, lc_messages C.
+ * The three patterns are exported because the CI export embeds them in its SQL (`\b` becomes `\y`
+ * there), so that it reads a 42501 exactly as this module does.
+ */
+export const NOT_ABOUT_THE_ROWS =
   /^(permission denied for (schema|type|sequence|language|database|tablespace|foreign-data wrapper|foreign server|large object|parameter)\b|query would be affected by row-level security policy)/;
+
+/** A 42501 that one row caused, see `isRowSecurityViolation`. */
+export const ROW_SECURITY_VIOLATION = /violates row-level security policy/;
+
+/** A 42501 about the statement as a whole, see `isStatementDenial`. */
+export const STATEMENT_DENIAL =
+  /^(permission denied for |query would be affected by row-level security policy)/;
 
 /** `true` when the failure means "Postgres refused this for lack of authorization". */
 export function isBlocked(failure: ProbeFailure): boolean {
@@ -91,7 +102,7 @@ export function isBlocked(failure: ProbeFailure): boolean {
 export function isRowSecurityViolation(failure: ProbeFailure): boolean {
   return (
     failure.sqlState === SQLSTATE_INSUFFICIENT_PRIVILEGE &&
-    /violates row-level security policy/.test(failure.message)
+    ROW_SECURITY_VIOLATION.test(failure.message)
   );
 }
 
@@ -103,10 +114,7 @@ export function isRowSecurityViolation(failure: ProbeFailure): boolean {
  */
 export function isStatementDenial(failure: ProbeFailure): boolean {
   return (
-    failure.sqlState === SQLSTATE_INSUFFICIENT_PRIVILEGE &&
-    /^(permission denied for |query would be affected by row-level security policy)/.test(
-      failure.message,
-    )
+    failure.sqlState === SQLSTATE_INSUFFICIENT_PRIVILEGE && STATEMENT_DENIAL.test(failure.message)
   );
 }
 

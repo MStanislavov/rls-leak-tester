@@ -196,8 +196,9 @@ async function refuseOpenTransaction(
 }
 
 /** Ours, not the user's: a failure here is a bug of this product, so it is not a SetupError. */
-const PIN_TIME_ZONE = "set time zone 'UTC'";
-const RESET_SESSION: readonly string[] = [
+export const PIN_TIME_ZONE = "set time zone 'UTC'";
+/** The session as the probes need it; the CI export starts its test file with the same statements. */
+export const RESET_SESSION: readonly string[] = [
   "reset session authorization",
   "reset role",
   "reset all",
@@ -208,6 +209,36 @@ const RESET_SESSION: readonly string[] = [
 export function exposedSchemasOf(scenario: Pick<ScenarioSetupInput, "options">): string[] {
   const configured = scenario.options?.exposedSchemas ?? [];
   return [...new Set(configured.length > 0 ? configured : DEFAULT_EXPOSED_SCHEMAS)];
+}
+
+/** The grants regime of a scenario; `null` in postgres mode, where no automatic grant is made. */
+export function supabaseGrantsOf(
+  scenario: Pick<ScenarioSetupInput, "mode" | "options">,
+): SetupSummary["supabaseGrants"] {
+  return scenario.mode === "supabase" ? (scenario.options?.supabaseGrants ?? "legacy") : null;
+}
+
+/**
+ * The scripts that run before the user's schema, in order: the shim, then the default grants of
+ * every exposed schema. Empty in postgres mode. `setupDatabase` runs exactly these, and the CI
+ * export writes exactly these into its setup file.
+ */
+export function supabasePrelude(
+  scenario: Pick<ScenarioSetupInput, "mode" | "options">,
+  supabase: SupabaseSetupSql,
+): { readonly phase: Extract<SetupPhase, "shim" | "grants">; readonly script: string }[] {
+  const regime = supabaseGrantsOf(scenario);
+  if (regime === null) {
+    return [];
+  }
+  const autoExposeNewTables = regime === "legacy";
+  return [
+    { phase: "shim", script: supabase.shimSql },
+    ...exposedSchemasOf(scenario).map((schema) => ({
+      phase: "grants" as const,
+      script: `${supabase.createSchemaSql(schema)}\n${supabase.defaultGrantsSql(schema, { autoExposeNewTables })}`,
+    })),
+  ];
 }
 
 /**
@@ -223,17 +254,11 @@ export async function setupDatabase(
   supabase: SupabaseSetupSql,
 ): Promise<SetupSummary> {
   const exposedSchemas = exposedSchemasOf(scenario);
-  let supabaseGrants: SetupSummary["supabaseGrants"] = null;
+  const supabaseGrants = supabaseGrantsOf(scenario);
   await engine.exec(PIN_TIME_ZONE);
 
-  if (scenario.mode === "supabase") {
-    supabaseGrants = scenario.options?.supabaseGrants ?? "legacy";
-    await runScript(engine, "shim", supabase.shimSql);
-    const autoExposeNewTables = supabaseGrants === "legacy";
-    for (const schema of exposedSchemas) {
-      const grants = `${supabase.createSchemaSql(schema)}\n${supabase.defaultGrantsSql(schema, { autoExposeNewTables })}`;
-      await runScript(engine, "grants", grants);
-    }
+  for (const { phase, script } of supabasePrelude(scenario, supabase)) {
+    await runScript(engine, phase, script);
   }
 
   const schemaStatements = await runScript(engine, "schema", scenario.schemaSql);

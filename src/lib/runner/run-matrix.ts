@@ -39,6 +39,7 @@ import {
   updateCell,
   type CellContext,
   type CellOutcome,
+  type CellPlanContext,
 } from "./cells";
 import { countStatuses, isDatabaseLost, sortKeys, toProbeFailure, verdictOf } from "./classify";
 import { withErrorBudget, type BudgetedEngine, type ErrorBudget } from "./error-budget";
@@ -113,6 +114,13 @@ export interface MatrixRun {
   readonly catalog: Catalog;
   /** The effective table configs: configured ones, plus the heuristics for the rest. */
   readonly tableConfigs: readonly TableConfig[];
+  /**
+   * What every PROBED cell was planned from, in cell order: identity, expected keys, ground truth,
+   * membership, column privileges. A cell that ended before it was probed (skipped, or its
+   * `expectedRowsSql` failed) has none; its reason is in `result`. The CI export reads these, so
+   * it plans the same probes as this run did. Not part of the result JSON.
+   */
+  readonly cellContexts: readonly CellPlanContext[];
   readonly timings: MatrixTimings;
 }
 
@@ -287,6 +295,8 @@ interface CellInput {
   readonly persona: Persona;
   readonly expectation: ResolvedExpectation;
   readonly executor: ProbeExecutor;
+  /** Receives what the cell is planned from, right before it is probed. */
+  readonly onPlanned: (context: CellPlanContext) => void;
 }
 
 const OPERATION_CELLS = {
@@ -390,9 +400,7 @@ async function runCell(built: Built, input: CellInput): Promise<CellOutcome> {
     expectation.operation === "update"
       ? await columnPrivileges(built, persona.dbRole, table)
       : { update: new Set<string>(), select: new Set<string>() };
-  const context: CellContext = {
-    engine: built.engine,
-    executor: input.executor,
+  const planContext: CellPlanContext = {
     identity: { role: persona.dbRole, claimsJson },
     facts,
     membership,
@@ -405,6 +413,8 @@ async function runCell(built: Built, input: CellInput): Promise<CellOutcome> {
     updatableColumns: privileges.update,
     selectableColumns: privileges.select,
   };
+  input.onPlanned(planContext);
+  const context: CellContext = { ...planContext, engine: built.engine, executor: input.executor };
   return OPERATION_CELLS[expectation.operation](context);
 }
 
@@ -502,6 +512,8 @@ export async function runMatrix(scenario: Scenario, options: RunMatrixOptions): 
     const personas = new Map(scenario.personas.map((persona) => [persona.id, persona]));
     const expectations = resolveExpectations(scenario, built.tableConfigs);
     const cells: CellResult[] = [];
+    const cellContexts: CellPlanContext[] = [];
+    const onPlanned = (context: CellPlanContext): void => void cellContexts.push(context);
     const cellTimings: { id: string; ms: number }[] = [];
     let rebuilds = 0;
 
@@ -514,7 +526,13 @@ export async function runMatrix(scenario: Scenario, options: RunMatrixOptions): 
         continue;
       }
       const cellStartedAt = now();
-      const outcome = await runCellSafely(built, { scenario, persona, expectation, executor });
+      const outcome = await runCellSafely(built, {
+        scenario,
+        persona,
+        expectation,
+        executor,
+        onPlanned,
+      });
       cells.push(outcome.cell);
       cellTimings.push({ id: cellId(expectation), ms: now() - cellStartedAt });
       options.onProgress?.({ done: cells.length, total: expectations.length, cell: outcome.cell });
@@ -529,6 +547,7 @@ export async function runMatrix(scenario: Scenario, options: RunMatrixOptions): 
       result: toResult(scenario, built, cells),
       catalog: built.catalog,
       tableConfigs: built.tableConfigs,
+      cellContexts,
       timings: { totalMs: now() - startedAt, setupMs, rebuilds, cells: cellTimings },
     };
   } finally {
